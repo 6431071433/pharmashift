@@ -330,7 +330,7 @@
         <label class="row small"><input type="checkbox" id="oSelf" ${S.org.allow_self_approve ? 'checked' : ''}> ให้ผู้จัดการอนุมัติคำขอของตัวเองได้ (เจ้าของร้านอนุมัติได้เสมอ)</label>
         <button class="btn primary" data-act="saveOrg">${ic('check')}บันทึก</button>
         <div class="stack small" style="border-top:1px solid var(--line);padding-top:12px"><b>ลิงก์แอปสำหรับพนักงาน</b><div class="row"><span class="code" style="font-size:12px;letter-spacing:0;overflow:hidden;text-overflow:ellipsis">${esc(liffUrl)}</span><button class="btn ghost" data-act="copy" data-text="${esc(liffUrl)}">${ic('copy')}</button></div>
-        <b>ลิงก์จอที่ร้าน (เปิดบนโทรศัพท์ร้าน)</b><div class="row"><span class="code" style="font-size:12px;letter-spacing:0;overflow:hidden;text-overflow:ellipsis">${esc(kioskUrl)}</span><button class="btn ghost" data-act="copy" data-text="${esc(kioskUrl)}">${ic('copy')}</button></div><span class="muted" style="font-size:11px">เวอร์ชัน 2 พ.ย. 69 (GPS · OT · สแกนเฉพาะวันมีเวร)</span></div></div>
+        <b>ลิงก์จอที่ร้าน (เปิดบนโทรศัพท์ร้าน)</b><div class="row"><span class="code" style="font-size:12px;letter-spacing:0;overflow:hidden;text-overflow:ellipsis">${esc(kioskUrl)}</span><button class="btn ghost" data-act="copy" data-text="${esc(kioskUrl)}">${ic('copy')}</button></div><span class="muted" style="font-size:11px">เวอร์ชัน 2 พ.ย. 69 (ไม่ต้องลงเวลารายคน · ปุ่มล้างข้อมูล)</span></div></div>
       <div class="card"><div class="card-head"><div class="row"><span class="icon-chip t-sky">${ic('map-pin')}</span><h2>สาขา</h2></div><button class="btn" data-act="editBranch">${ic('plus')}เพิ่มสาขา</button></div>`;
     if (!S.branches.length) h += `<p class="small muted">ยังไม่มีสาขา กด "เพิ่มสาขา" เพื่อเริ่ม</p>`;
     for (const br of S.branches) h += `<div class="list-row" style="flex-wrap:wrap"><div class="grow"><b>${esc(br.name)}</b>${br.active ? '' : ' <span class="pill wait">ปิดใช้งาน</span>'}<br><span class="small muted">${t5(br.open_time)}–${t5(br.close_time)}${br.lat != null ? ' · ตั้งตำแหน่งแล้ว' : ' · ยังไม่ตั้งตำแหน่ง'}</span></div><button class="btn ghost" data-act="pairKiosk" data-id="${br.id}">${ic('monitor-smartphone')}จับคู่จอ QR</button>${br.allow_static ? `<a class="btn ghost" href="print.html?b=${br.id}" target="_blank" rel="noopener">${ic('printer')}ปริ้น QR ติดผนัง</a>` : ''}<button class="btn ghost" data-act="editBranch" data-id="${br.id}" aria-label="แก้ไขสาขา">${ic('pencil')}</button></div>`;
@@ -341,7 +341,11 @@
         ${m.user_id ? `<span class="pill ok">${ic('check')}เชื่อม LINE แล้ว</span>` : code ? `<span class="code">${esc(code)}</span><button class="btn ghost" data-act="copyInvite" data-id="${m.id}">${ic('send')}ส่งรหัส</button>` : ''}
         ${m.id !== S.me.member_id && (m.role !== 'owner' || S.me.role === 'owner') ? `<button class="btn ghost" data-act="editMember" data-id="${m.id}" aria-label="แก้ไขพนักงาน">${ic('pencil')}</button>` : ''}</div>`;
     }
-    return h + `</div>`;
+    h += `</div>`;
+    if (S.me.role === 'owner') h += `<div class="card" style="border:1.5px solid var(--coral-soft)"><div class="row"><span class="icon-chip t-coral">${ic('trash-2')}</span><h2>ล้างข้อมูล</h2></div>
+      <p class="small muted">ใช้หลังสาธิต หรือก่อนเริ่มใช้งานจริง · เฉพาะเจ้าของร้าน · ร้านอื่นในระบบไม่กระทบ</p>
+      <div class="row" style="flex-wrap:wrap"><button class="btn" data-act="resetSheet" data-mode="data">${ic('eraser')}ล้างข้อมูลการใช้งาน</button><button class="btn danger" data-act="resetSheet" data-mode="org">${ic('trash-2')}ลบร้านนี้ทั้งร้าน</button></div></div>`;
+    return h;
   }
   function branchSheet(id) {
     const br = S.branches.find((x) => x.id === id) || { name: '', open_time: '09:00', close_time: '21:00', active: true };
@@ -622,6 +626,22 @@
       if (el.dataset.confirm !== '1') { el.dataset.confirm = '1'; el.innerHTML = ic('triangle-alert') + 'แตะอีกครั้งเพื่อยืนยัน'; icons(); return; }
       busyBtn(el, true);
       try { await rpc('rotate_branch_secret', { p_branch: d.id }); closeLayer(); toast('เปลี่ยนรหัสลับแล้ว กรุณาจับคู่โทรศัพท์ร้านใหม่'); } catch (e) { busyBtn(el, false); toast(errMsg(e), 'err'); }
+    },
+    resetSheet: (d) => {
+      const all = d.mode === 'org';
+      sheet(all ? 'ลบร้านนี้ทั้งร้าน' : 'ล้างข้อมูลการใช้งาน', `
+        <p class="small">${all ? 'ลบทุกอย่างของร้านนี้: สาขา พนักงาน เวร เวลาเข้าออก ค่าจ้าง จอ QR และ QR ติดผนังจะใช้ไม่ได้ <b>กู้คืนไม่ได้</b>' : 'ลบเวลาเข้า–ออกงาน เวร เวรว่าง คำขอลา คำขอแก้เวลา OT วันว่าง และบันทึกส่งเวร<br>ร้าน สาขา พนักงาน ค่าจ้าง และจอ QR ยังอยู่ครบ <b>กู้คืนไม่ได้</b>'}</p>
+        <label class="field"><span>พิมพ์ชื่อร้าน <b>${esc(S.org.name)}</b> เพื่อยืนยัน</span><input id="rConfirm" autocomplete="off"></label>
+        <button class="btn danger block" data-act="doReset" data-mode="${d.mode}">${ic('trash-2')}${all ? 'ลบร้าน' : 'ล้างข้อมูล'}</button>`);
+    },
+    doReset: async (d, el) => {
+      const txt = (val('rConfirm') || '').trim();
+      if (txt !== S.org.name) return toast('พิมพ์ชื่อร้านไม่ตรง', 'err');
+      busyBtn(el, true);
+      try {
+        if (d.mode === 'org') { await rpc('delete_org', { p_org: S.me.org_id, p_confirm: txt }); closeLayer(); localStorage.removeItem('ps_org'); toast('ลบร้านแล้ว'); S.tab = 'home'; await loadOrgs(); }
+        else { await rpc('reset_org_data', { p_org: S.me.org_id, p_confirm: txt }); closeLayer(); toast('ล้างข้อมูลแล้ว'); await refresh(); }
+      } catch (e) { busyBtn(el, false); toast(errMsg(e), 'err'); }
     },
     editMember: (d) => memberSheet(d.id),
     saveMember: async (d, el) => {
