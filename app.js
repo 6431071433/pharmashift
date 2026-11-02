@@ -54,6 +54,7 @@
       const late = mins(fmtTime(last.at, S.tz)) - st - g;
       return late > 0 ? { c: 'warn', i: 'clock', t: `เข้างาน ${fmtTime(last.at, S.tz)} · สาย ${late} นาที` } : { c: 'ok', i: 'check', t: `เข้างาน ${fmtTime(last.at, S.tz)}` };
     }
+    if (M(s.member_id)?.clock_free) return { c: 'ok', i: 'user-check', t: 'ไม่ต้องลงเวลา' };
     if (s.work_date > today() || N < st) return { c: 'wait', i: 'clock', t: `เริ่ม ${t5(s.start_time)}` };
     if (N - st <= g) return { c: 'wait', i: 'hourglass', t: `ยังไม่เข้า · ผ่อนผันถึง ${hm(st + g)}` };
     if (N > mins(s.end_time)) return { c: 'alert', i: 'circle-alert', t: 'ไม่ได้ลงเวลา' };
@@ -305,7 +306,7 @@
     try {
       const rows = await rpc('month_hours', { p_org: S.me.org_id, p_month: S.month + '-01' });
       if (S.isOwner) {
-        const list = rows.filter((r) => M(r.member_id).role !== 'owner');
+        const list = rows.filter((r) => M(r.member_id).role !== 'owner' && (!M(r.member_id).clock_free || Number(r.actual_hours) > 0));
         const total = list.reduce((a, r) => a + Number(r.amount || 0), 0);
         el.innerHTML = `<div style="overflow-x:auto"><table><thead><tr><th>ชื่อ</th><th class="r">คิดเงิน (ชม.)</th><th class="r">เวลาจริง</th><th class="r">บาท/ชม.</th><th class="r">ยอด</th></tr></thead><tbody>${list.map((r) => { const m = M(r.member_id); return `<tr><td><div class="row">${avatar(m.display_name, m.color, 'sm')}<span>${esc(m.display_name)}<br><span class="tiny muted">${esc(EMP[m.employment])}</span></span></div></td><td class="r">${Number(r.hours).toFixed(2)}${Number(r.ot_pending_hours) > 0 ? `<br><span class="pill warn" style="font-size:11px">OT รอ ${Number(r.ot_pending_hours).toFixed(2)}</span>` : ''}</td><td class="r muted">${Number(r.actual_hours).toFixed(2)}</td><td class="r"><input class="rate" type="number" min="0" step="5" value="${r.hourly_rate ?? ''}" placeholder="—" data-change="rate" data-m="${r.member_id}" aria-label="ค่าจ้างต่อชั่วโมง ${esc(m.display_name)}"></td><td class="r"><b>฿${baht(r.amount)}</b></td></tr>`; }).join('')}</tbody><tfoot><tr><td colspan="4"><b>รวม</b></td><td class="r"><b>฿${baht(total)}</b></td></tr></tfoot></table></div>`;
       } else {
@@ -329,14 +330,14 @@
         <label class="row small"><input type="checkbox" id="oSelf" ${S.org.allow_self_approve ? 'checked' : ''}> ให้ผู้จัดการอนุมัติคำขอของตัวเองได้ (เจ้าของร้านอนุมัติได้เสมอ)</label>
         <button class="btn primary" data-act="saveOrg">${ic('check')}บันทึก</button>
         <div class="stack small" style="border-top:1px solid var(--line);padding-top:12px"><b>ลิงก์แอปสำหรับพนักงาน</b><div class="row"><span class="code" style="font-size:12px;letter-spacing:0;overflow:hidden;text-overflow:ellipsis">${esc(liffUrl)}</span><button class="btn ghost" data-act="copy" data-text="${esc(liffUrl)}">${ic('copy')}</button></div>
-        <b>ลิงก์จอที่ร้าน (เปิดบนโทรศัพท์ร้าน)</b><div class="row"><span class="code" style="font-size:12px;letter-spacing:0;overflow:hidden;text-overflow:ellipsis">${esc(kioskUrl)}</span><button class="btn ghost" data-act="copy" data-text="${esc(kioskUrl)}">${ic('copy')}</button></div></div></div>
+        <b>ลิงก์จอที่ร้าน (เปิดบนโทรศัพท์ร้าน)</b><div class="row"><span class="code" style="font-size:12px;letter-spacing:0;overflow:hidden;text-overflow:ellipsis">${esc(kioskUrl)}</span><button class="btn ghost" data-act="copy" data-text="${esc(kioskUrl)}">${ic('copy')}</button></div><span class="muted" style="font-size:11px">เวอร์ชัน 2 พ.ย. 69 (GPS · OT · สแกนเฉพาะวันมีเวร)</span></div></div>
       <div class="card"><div class="card-head"><div class="row"><span class="icon-chip t-sky">${ic('map-pin')}</span><h2>สาขา</h2></div><button class="btn" data-act="editBranch">${ic('plus')}เพิ่มสาขา</button></div>`;
     if (!S.branches.length) h += `<p class="small muted">ยังไม่มีสาขา กด "เพิ่มสาขา" เพื่อเริ่ม</p>`;
     for (const br of S.branches) h += `<div class="list-row" style="flex-wrap:wrap"><div class="grow"><b>${esc(br.name)}</b>${br.active ? '' : ' <span class="pill wait">ปิดใช้งาน</span>'}<br><span class="small muted">${t5(br.open_time)}–${t5(br.close_time)}${br.lat != null ? ' · ตั้งตำแหน่งแล้ว' : ' · ยังไม่ตั้งตำแหน่ง'}</span></div><button class="btn ghost" data-act="pairKiosk" data-id="${br.id}">${ic('monitor-smartphone')}จับคู่จอ QR</button>${br.allow_static ? `<a class="btn ghost" href="print.html?b=${br.id}" target="_blank" rel="noopener">${ic('printer')}ปริ้น QR ติดผนัง</a>` : ''}<button class="btn ghost" data-act="editBranch" data-id="${br.id}" aria-label="แก้ไขสาขา">${ic('pencil')}</button></div>`;
     h += `</div></div><div class="card"><div class="card-head"><div class="row"><span class="icon-chip t-lilac">${ic('users')}</span><h2>พนักงาน</h2></div><button class="btn primary" data-act="editMember">${ic('user-plus')}เพิ่มพนักงาน</button></div>`;
     for (const m of S.members) {
       const code = S.invites[m.id];
-      h += `<div class="list-row" style="flex-wrap:wrap">${avatar(m.display_name, m.color, '', m.avatar_url)}<div class="grow"><b>${esc(m.display_name)}</b>${m.active ? '' : ' <span class="pill wait">ออกแล้ว</span>'}<br><span class="small muted">${esc(ROLE[m.role])} · ${esc(EMP[m.employment])}${m.home_branch_id ? ' · ' + esc(B(m.home_branch_id).name) : ''}${m.employment === 'parttime' && S.pay[m.id] != null ? ` · ${baht(S.pay[m.id])} บาท/ชม.` : ''}</span></div>
+      h += `<div class="list-row" style="flex-wrap:wrap">${avatar(m.display_name, m.color, '', m.avatar_url)}<div class="grow"><b>${esc(m.display_name)}</b>${m.active ? '' : ' <span class="pill wait">ออกแล้ว</span>'}<br><span class="small muted">${esc(ROLE[m.role])} · ${esc(EMP[m.employment])}${m.home_branch_id ? ' · ' + esc(B(m.home_branch_id).name) : ''}${m.employment === 'parttime' && S.pay[m.id] != null ? ` · ${baht(S.pay[m.id])} บาท/ชม.` : ''}${m.clock_free ? ' · ไม่ต้องลงเวลา' : ''}</span></div>
         ${m.user_id ? `<span class="pill ok">${ic('check')}เชื่อม LINE แล้ว</span>` : code ? `<span class="code">${esc(code)}</span><button class="btn ghost" data-act="copyInvite" data-id="${m.id}">${ic('send')}ส่งรหัส</button>` : ''}
         ${m.id !== S.me.member_id && (m.role !== 'owner' || S.me.role === 'owner') ? `<button class="btn ghost" data-act="editMember" data-id="${m.id}" aria-label="แก้ไขพนักงาน">${ic('pencil')}</button>` : ''}</div>`;
     }
@@ -368,6 +369,7 @@
         <label class="field">การจ้าง<select id="mEmp"><option value="parttime">Part-time</option><option value="fulltime">ประจำ</option></select></label></div>
       <div class="fields"><label class="field">สาขาหลัก<select id="mBranch"><option value="">— ไม่ระบุ —</option>${S.branches.map((b) => `<option value="${b.id}">${esc(b.name)}</option>`).join('')}</select></label>
         <label class="field">ค่าจ้าง/ชม. (บาท)<input id="mRate" type="number" min="0" step="5" value="${S.pay[m.id] ?? ''}" placeholder="เฉพาะ part-time"></label></div>
+      <label class="row small"><input type="checkbox" id="mFree" ${m.clock_free ? 'checked' : ''}> ไม่ต้องสแกนเข้า–ออกงาน (เช่น คนที่เปิด–ปิดร้านประจำ ไม่คิดค่าจ้างรายชั่วโมง)</label>
       <label class="field">สีประจำตัว<select id="mColor">${TONES.map((t) => `<option value="${t}">${TONE_TH[t]}</option>`).join('')}</select></label>
       ${id ? `<label class="row small"><input type="checkbox" id="mActive" ${m.active ? 'checked' : ''}> ยังทำงานอยู่ (เอาออกเพื่อปิดการเข้าถึง)</label>` : `<p class="small muted">บันทึกแล้วจะได้รหัสเชิญ 8 ตัว ส่งให้พนักงานใส่ในแอปครั้งเดียว</p>`}
       <button class="btn primary block" data-act="saveMember" data-id="${id || ''}">${ic('check')}บันทึก</button>`);
@@ -384,14 +386,14 @@
   const openForMe = () => S.open.filter((o) => o.work_date >= today());
 
   function staffHome() {
-    const me = M(S.me.member_id), t = today(), mine = myShifts().filter((s) => s.work_date === t), on = inNow(S.myLast);
+    const me = M(S.me.member_id), t = today(), mine = myShifts().filter((s) => s.work_date === t), on = inNow(S.myLast), free = me.clock_free && !on;
     const s0 = mine[0], night = s0 ? mins(s0.start_time) >= 900 : nowMins(S.tz) >= 17 * 60;
     let h = `<div class="between"><div><span class="small muted">${greet(S.tz)}</span><h1>คุณ${esc(shortName(S.me.display_name))}</h1></div>${avatar(S.me.display_name, me.color, 'lg', S.profile.picture)}</div>`;
     h += `<div class="shift-hero ${night ? 'night' : ''}"><div class="between"><span class="small" style="opacity:.9">${s0 ? 'เวรวันนี้ · ' + esc(B(s0.branch_id).name) : 'วันนี้ไม่มีเวรในตาราง'}</span>${on ? `<span class="pill">${ic('check')}เข้างานแล้ว ${fmtTime(S.myLast.at, S.tz)}</span>` : s0 ? (() => { const st = statusOf(s0, S.myLast); return `<span class="pill">${ic(st.i)}${st.t}</span>`; })() : ''}</div>
       <div class="time">${s0 ? `${t5(s0.start_time)} – ${t5(s0.end_time)}` : hm(nowMins(S.tz))}</div>
-      ${on ? `<textarea id="note" placeholder="ฝากถึงคนเข้าเวรถัดไป (ไม่บังคับ) เช่น ยาใกล้หมด คนไข้นัดรับยา"></textarea><button class="go" data-act="scan" data-kind="out">${ic('log-out', 'ic-lg')}ออกงาน</button>`
+      ${free ? `<span class="small" style="opacity:.9;text-align:center">${ic('user-check')} คุณไม่ต้องสแกนเข้า–ออกงาน เจ้าของร้านตั้งไว้ให้แล้ว</span>` : on ? `<textarea id="note" placeholder="ฝากถึงคนเข้าเวรถัดไป (ไม่บังคับ) เช่น ยาใกล้หมด คนไข้นัดรับยา"></textarea><button class="go" data-act="scan" data-kind="out">${ic('log-out', 'ic-lg')}ออกงาน</button>`
         : `<button class="go" data-act="scan" data-kind="in">${ic('scan-line', 'ic-lg')}เข้างาน</button><span class="tiny" style="opacity:.9;text-align:center">${!s0 && S.org.require_shift && me.role !== 'owner' ? 'วันนี้ไม่มีเวร จะสแกนเข้างานได้เมื่อเจ้าของร้านเพิ่มเวรให้' : 'สแกน QR บนจอร้าน'}</span>`}</div>`;
-    if (forgotOut(S.myLast)) h += `<div class="card" style="flex-direction:row;align-items:center;border:1.5px solid var(--warn)"><span class="icon-chip t-sun">${ic('alarm-clock')}</span><span class="grow small"><b>ลืมกดออกงานเมื่อ${dShort(todayStr(S.tz, new Date(S.myLast.at)))}</b><br>วันนั้นยังไม่ถูกนับชั่วโมง กดขอแก้เวลาออกงานเพื่อให้เจ้าของอนุมัติ</span><button class="btn" data-act="fixSheet" data-kind="out" data-date="${todayStr(S.tz, new Date(S.myLast.at))}">ขอแก้</button></div>`;
+    if (!me.clock_free && forgotOut(S.myLast)) h += `<div class="card" style="flex-direction:row;align-items:center;border:1.5px solid var(--warn)"><span class="icon-chip t-sun">${ic('alarm-clock')}</span><span class="grow small"><b>ลืมกดออกงานเมื่อ${dShort(todayStr(S.tz, new Date(S.myLast.at)))}</b><br>วันนั้นยังไม่ถูกนับชั่วโมง กดขอแก้เวลาออกงานเพื่อให้เจ้าของอนุมัติ</span><button class="btn" data-act="fixSheet" data-kind="out" data-date="${todayStr(S.tz, new Date(S.myLast.at))}">ขอแก้</button></div>`;
     const bId = s0?.branch_id || me.home_branch_id;
     const notes = S.handover.filter((n) => (!bId || n.branch_id === bId) && Date.now() - new Date(n.created_at).getTime() < 3 * 86400e3).slice(0, 3);
     if (notes.length) h += `<div class="card"><div class="row"><span class="icon-chip t-sun">${ic('notebook-pen')}</span><h3>บันทึกส่งเวรล่าสุด</h3></div>${notes.map((n) => `<div class="stack" style="gap:2px"><span class="small">${esc(n.body)}</span><span class="tiny muted">${esc(M(n.member_id).display_name)} · ${dShort(todayStr(S.tz, new Date(n.created_at)))} ${fmtTime(n.created_at, S.tz)}</span></div>`).join('')}</div>`;
@@ -623,7 +625,7 @@
     },
     editMember: (d) => memberSheet(d.id),
     saveMember: async (d, el) => {
-      const row = { display_name: (val('mName') || '').trim(), role: val('mRole'), employment: val('mRole') === 'owner' ? 'owner' : val('mEmp'), home_branch_id: val('mBranch') || null, color: val('mColor') };
+      const row = { display_name: (val('mName') || '').trim(), role: val('mRole'), employment: val('mRole') === 'owner' ? 'owner' : val('mEmp'), home_branch_id: val('mBranch') || null, color: val('mColor'), clock_free: document.getElementById('mFree').checked };
       if (!row.display_name) return toast('กรุณาใส่ชื่อ', 'err');
       const rate = val('mRate');
       busyBtn(el, true);
