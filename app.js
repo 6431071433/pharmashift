@@ -29,6 +29,22 @@
   const isToday = (iso) => todayStr(S.tz, new Date(iso)) === today();
   const inNow = (last) => last && last.kind === 'in' && Date.now() - new Date(last.at).getTime() < 16 * 3600e3;
   const grace = () => S.org?.grace_minutes ?? 15;
+  const fmtDist = (m) => (m < 1000 ? `${m} ม.` : `${(m / 1000).toFixed(1)} กม.`);
+  function geoFlag(a) {
+    if (!a || !isToday(a.at)) return '';
+    const br = B(a.branch_id), r = br.gps_radius || 150;
+    let h = '';
+    if (a.distance_m != null && a.distance_m > r) h += `<span class="pill alert">${ic('map-pin-off')}สแกนห่างร้าน ${fmtDist(a.distance_m)}</span>`;
+    else if (a.distance_m == null && br.lat != null && !a.via_static) h += `<span class="tiny muted">ไม่มีพิกัด GPS</span>`;
+    if (a.via_static) h += `<span class="tiny muted">${ic('qr-code')} QR ติดผนัง</span>`;
+    return h ? `<div class="row" style="flex-wrap:wrap;gap:6px;padding-left:46px">${h}</div>` : '';
+  }
+  function getPos() {
+    return new Promise((res) => {
+      if (!navigator.geolocation) return res(null);
+      navigator.geolocation.getCurrentPosition((p) => res({ lat: p.coords.latitude, lng: p.coords.longitude, acc: p.coords.accuracy }), () => res(null), { enableHighAccuracy: true, timeout: 8000, maximumAge: 30000 });
+    });
+  }
 
   function statusOf(s, last) {
     const st = mins(s.start_time), g = grace(), N = nowMins(S.tz);
@@ -195,8 +211,8 @@
       const N = nowMins(S.tz), isOpen = N >= mins(br.open_time) && N < mins(br.close_time);
       const sch = S.shifts.filter((s) => s.work_date === t && s.branch_id === br.id);
       const present = Object.values(la).filter((a) => a.branch_id === br.id && inNow(a) && !sch.some((s) => s.member_id === a.member_id));
-      let rows = sch.map((s) => { const st = statusOf(s, la[s.member_id]); const m = M(s.member_id); return `<div class="row">${avatar(m.display_name, m.color)}<div class="grow"><b>${esc(m.display_name)}</b><br><span class="tiny muted">${esc(ROLE[m.role])} · ${t5(s.start_time)}–${t5(s.end_time)}</span></div><span class="pill ${st.c}">${ic(st.i)}${st.t}</span></div>`; }).join('');
-      rows += present.map((a) => { const m = M(a.member_id); return `<div class="row">${avatar(m.display_name, m.color)}<div class="grow"><b>${esc(m.display_name)}</b><br><span class="tiny muted">${esc(ROLE[m.role])} · ไม่มีเวรในตาราง</span></div><span class="pill ok">${ic('check')}เข้างาน ${fmtTime(a.at, S.tz)}</span></div>`; }).join('');
+      let rows = sch.map((s) => { const st = statusOf(s, la[s.member_id]); const m = M(s.member_id); return `<div class="row">${avatar(m.display_name, m.color)}<div class="grow"><b>${esc(m.display_name)}</b><br><span class="tiny muted">${esc(ROLE[m.role])} · ${t5(s.start_time)}–${t5(s.end_time)}</span></div><span class="pill ${st.c}">${ic(st.i)}${st.t}</span></div>${geoFlag(la[s.member_id])}`; }).join('');
+      rows += present.map((a) => { const m = M(a.member_id); return `<div class="row">${avatar(m.display_name, m.color)}<div class="grow"><b>${esc(m.display_name)}</b><br><span class="tiny muted">${esc(ROLE[m.role])} · ไม่มีเวรในตาราง</span></div><span class="pill ok">${ic('check')}เข้างาน ${fmtTime(a.at, S.tz)}</span></div>${geoFlag(a)}`; }).join('');
       if (!rows) rows = `<p class="small muted">วันนี้ยังไม่มีเวรในตาราง</p>`;
       h += `<div class="card" style="box-shadow:none;border:1.5px solid var(--line)"><div class="row"><div class="grow"><h3>${esc(br.name)}</h3><span class="tiny muted">${t5(br.open_time)}–${t5(br.close_time)}</span></div><span class="open-badge ${isOpen ? '' : 'closed'}">${isOpen ? '<span class="pulse"></span>เปิดอยู่' : 'ปิดอยู่'}</span></div>${ribbon(br.open_time, br.close_time, S.tz)}${rows}</div>`;
     }
@@ -304,7 +320,7 @@
         <b>ลิงก์จอที่ร้าน (เปิดบนโทรศัพท์ร้าน)</b><div class="row"><span class="code" style="font-size:12px;letter-spacing:0;overflow:hidden;text-overflow:ellipsis">${esc(kioskUrl)}</span><button class="btn ghost" data-act="copy" data-text="${esc(kioskUrl)}">${ic('copy')}</button></div></div></div>
       <div class="card"><div class="card-head"><div class="row"><span class="icon-chip t-sky">${ic('map-pin')}</span><h2>สาขา</h2></div><button class="btn" data-act="editBranch">${ic('plus')}เพิ่มสาขา</button></div>`;
     if (!S.branches.length) h += `<p class="small muted">ยังไม่มีสาขา กด "เพิ่มสาขา" เพื่อเริ่ม</p>`;
-    for (const br of S.branches) h += `<div class="list-row" style="flex-wrap:wrap"><div class="grow"><b>${esc(br.name)}</b>${br.active ? '' : ' <span class="pill wait">ปิดใช้งาน</span>'}<br><span class="small muted">${t5(br.open_time)}–${t5(br.close_time)}</span></div><button class="btn ghost" data-act="pairKiosk" data-id="${br.id}">${ic('smartphone')}จับคู่โทรศัพท์ร้าน</button><button class="btn ghost" data-act="editBranch" data-id="${br.id}" aria-label="แก้ไขสาขา">${ic('pencil')}</button></div>`;
+    for (const br of S.branches) h += `<div class="list-row" style="flex-wrap:wrap"><div class="grow"><b>${esc(br.name)}</b>${br.active ? '' : ' <span class="pill wait">ปิดใช้งาน</span>'}<br><span class="small muted">${t5(br.open_time)}–${t5(br.close_time)}${br.lat != null ? ' · ตั้งตำแหน่งแล้ว' : ' · ยังไม่ตั้งตำแหน่ง'}</span></div><button class="btn ghost" data-act="pairKiosk" data-id="${br.id}">${ic('monitor-smartphone')}จับคู่จอ QR</button>${br.allow_static ? `<a class="btn ghost" href="print.html?b=${br.id}" target="_blank" rel="noopener">${ic('printer')}ปริ้น QR ติดผนัง</a>` : ''}<button class="btn ghost" data-act="editBranch" data-id="${br.id}" aria-label="แก้ไขสาขา">${ic('pencil')}</button></div>`;
     h += `</div></div><div class="card"><div class="card-head"><div class="row"><span class="icon-chip t-lilac">${ic('users')}</span><h2>พนักงาน</h2></div><button class="btn primary" data-act="editMember">${ic('user-plus')}เพิ่มพนักงาน</button></div>`;
     for (const m of S.members) {
       const code = S.invites[m.id];
@@ -319,9 +335,18 @@
     sheet(id ? 'แก้ไขสาขา' : 'เพิ่มสาขา', `
       <label class="field">ชื่อสาขา<input id="bName" value="${esc(br.name)}" placeholder="เช่น สาขา 1 ถนนสุขุมวิท"></label>
       <div class="fields"><label class="field">เปิด<input id="bOpen" type="time" value="${t5(br.open_time)}"></label><label class="field">ปิด<input id="bClose" type="time" value="${t5(br.close_time)}"></label></div>
+      <div class="stack" style="background:var(--bg);border-radius:14px;padding:12px">
+        <b>ตำแหน่งร้าน (ใช้ตรวจ GPS)</b>
+        <span class="small muted" id="bLocTxt">${br.lat != null ? `ตั้งแล้ว: ${Number(br.lat).toFixed(5)}, ${Number(br.lng).toFixed(5)}` : 'ยังไม่ได้ตั้ง'}</span>
+        <input type="hidden" id="bLat" value="${br.lat ?? ''}"><input type="hidden" id="bLng" value="${br.lng ?? ''}">
+        <button class="btn" data-act="useHere">${ic('locate-fixed')}ใช้ตำแหน่งปัจจุบัน (กดตอนยืนอยู่ในร้าน)</button>
+        <label class="field">ระยะที่ยอมรับจากร้าน<select id="bRadius">${[100, 150, 200, 300, 500].map((n) => `<option value="${n}" ${(br.gps_radius || 150) === n ? 'selected' : ''}>${n} เมตร</option>`).join('')}</select></label>
+        <label class="row small"><input type="checkbox" id="bStatic" ${br.allow_static ? 'checked' : ''}> เปิดใช้ QR ปริ้นติดผนัง (สแกนได้เฉพาะเมื่ออยู่ในระยะ)</label>
+        <span class="tiny muted">QR บนจอยังใช้ได้เสมอ ถ้าสแกนห่างร้านเกินระยะ ระบบยังบันทึกแต่ขึ้นธงเตือนให้เจ้าของเห็น</span>
+      </div>
       ${id ? `<label class="row small"><input type="checkbox" id="bActive" ${br.active ? 'checked' : ''}> เปิดใช้งานสาขานี้</label>` : ''}
       <button class="btn primary block" data-act="saveBranch" data-id="${id || ''}">${ic('check')}บันทึก</button>
-      ${id ? `<div class="stack small" style="border-top:1px solid var(--line);padding-top:12px"><b>โทรศัพท์ร้านหาย?</b><span class="muted">เปลี่ยนรหัสลับแล้วเครื่องเก่าจะสร้าง QR ไม่ได้ทันที ต้องจับคู่เครื่องใหม่</span><button class="btn danger" data-act="rotate" data-id="${id}">${ic('key-round')}เปลี่ยนรหัสลับของสาขา</button></div>` : ''}`);
+      ${id ? `<div class="stack small" style="border-top:1px solid var(--line);padding-top:12px"><b>โทรศัพท์ร้านหาย?</b><span class="muted">เปลี่ยนรหัสลับแล้วจอ QR เครื่องเก่าและ QR ที่ปริ้นไว้จะใช้ไม่ได้ทันที ต้องจับคู่จอใหม่และปริ้นใหม่</span><button class="btn danger" data-act="rotate" data-id="${id}">${ic('key-round')}เปลี่ยนรหัสลับของสาขา</button></div>` : ''}`);
   }
   function memberSheet(id) {
     const m = S.members.find((x) => x.id === id) || { display_name: '', role: 'pharmacist', employment: 'parttime', home_branch_id: '', color: TONES[S.members.length % TONES.length], active: true };
@@ -451,12 +476,13 @@
     sheet('ออกงาน', `<p class="muted">คุณเข้างานตั้งแต่ ${fmtTime(S.myLast.at, S.tz)} ต้องการออกงานตอนนี้ใช่ไหม</p><label class="field">ฝากถึงคนเข้าเวรถัดไป (ไม่บังคับ)<textarea id="note2" placeholder="เช่น ยาใกล้หมด คนไข้นัดรับยา"></textarea></label><button class="btn primary block" data-act="confirmOut">${ic('log-out')}ยืนยันออกงาน</button>`);
   }
   async function doClock(ps, kind, note) {
-    layer(`<div class="overlay"><div class="spinner"></div><b>กำลังบันทึกเวลา…</b></div>`);
+    layer(`<div class="overlay"><div class="spinner"></div><b>กำลังตรวจตำแหน่งและบันทึกเวลา…</b><span class="small muted">ถ้ามีหน้าต่างขอใช้ตำแหน่ง กด "อนุญาต"</span></div>`);
     try {
-      const r = await rpc('clock', { p_payload: ps, p_kind: kind });
+      const pos = await getPos();
+      const r = await rpc('clock', { p_payload: ps, p_kind: kind, p_lat: pos?.lat ?? null, p_lng: pos?.lng ?? null, p_acc: pos?.acc ?? null });
       if (kind === 'out' && note && note.trim()) { try { await rpc('post_handover', { p_branch: ps.split('|')[1], p_body: note.trim() }); } catch (_) { /* ไม่ขัดการออกงาน */ } }
       layer(`<div class="overlay" data-act="close">${confettiHTML()}<svg class="okmark" viewBox="0 0 120 120" aria-hidden="true"><circle cx="60" cy="60" r="52" fill="var(--ok-soft)" stroke="var(--ok)" stroke-width="6"/><path d="M38 62l15 15 30-32" fill="none" stroke="var(--ok)" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        <h1>${kind === 'in' ? 'เข้างานเรียบร้อย!' : 'ออกงานเรียบร้อย!'}</h1><div style="font:500 36px var(--display)">${fmtTime(r.at, S.tz)}</div><span class="muted">${esc(r.branch)} · ${kind === 'in' ? 'ขอให้วันนี้เป็นวันที่ดีนะ' : 'เดินทางกลับปลอดภัยนะ'}</span></div>`);
+        <h1>${kind === 'in' ? 'เข้างานเรียบร้อย!' : 'ออกงานเรียบร้อย!'}</h1><div style="font:500 36px var(--display)">${fmtTime(r.at, S.tz)}</div><span class="muted">${esc(r.branch)} · ${kind === 'in' ? 'ขอให้วันนี้เป็นวันที่ดีนะ' : 'เดินทางกลับปลอดภัยนะ'}</span>${r.far ? `<span class="pill warn">${ic('map-pin-off')}ตำแหน่งห่างร้าน ${fmtDist(r.distance_m)} · เจ้าของร้านจะเห็นธงเตือน</span>` : ''}</div>`);
       setTimeout(closeLayer, 2800);
       await refresh();
     } catch (e) { closeLayer(); toast(errMsg(e), 'err'); }
@@ -548,9 +574,18 @@
     decideFix: async (d, el) => { busyBtn(el, true); try { await rpc('decide_fix', { p_id: d.id, p_approve: d.ok === '1' }); toast('บันทึกแล้ว'); await refresh(); } catch (e) { busyBtn(el, false); toast(errMsg(e), 'err'); } },
     saveOrg: async (d, el) => { busyBtn(el, true); try { await q(sb.from('orgs').update({ name: val('oName').trim(), grace_minutes: Number(val('oGrace')) }).eq('id', S.me.org_id)); toast('บันทึกแล้ว'); await loadOrgs(S.me.org_id); } catch (e) { busyBtn(el, false); toast(errMsg(e), 'err'); } },
     editBranch: (d) => branchSheet(d.id),
+    useHere: async (d, el) => {
+      busyBtn(el, true); const pos = await getPos(); busyBtn(el, false);
+      if (!pos) return toast('อ่านตำแหน่งไม่ได้ กรุณาอนุญาตการใช้ตำแหน่งในเบราว์เซอร์', 'err');
+      document.getElementById('bLat').value = pos.lat; document.getElementById('bLng').value = pos.lng;
+      document.getElementById('bLocTxt').textContent = `ตั้งแล้ว: ${pos.lat.toFixed(5)}, ${pos.lng.toFixed(5)} (คลาดเคลื่อน ±${Math.round(pos.acc)} ม.)`;
+      toast('ได้ตำแหน่งแล้ว กดบันทึกเพื่อใช้งาน');
+    },
     saveBranch: async (d, el) => {
-      const row = { name: (val('bName') || '').trim(), open_time: val('bOpen'), close_time: val('bClose') };
+      const lat = val('bLat'), lng = val('bLng');
+      const row = { name: (val('bName') || '').trim(), open_time: val('bOpen'), close_time: val('bClose'), lat: lat === '' ? null : Number(lat), lng: lng === '' ? null : Number(lng), gps_radius: Number(val('bRadius')) || 150, allow_static: !!document.getElementById('bStatic')?.checked };
       if (!row.name) return toast('กรุณาใส่ชื่อสาขา', 'err');
+      if (row.allow_static && row.lat == null) return toast('ต้องตั้งตำแหน่งร้านก่อนเปิดใช้ QR ติดผนัง', 'err');
       if (row.close_time <= row.open_time) return toast('เวลาปิดต้องหลังเวลาเปิด', 'err');
       busyBtn(el, true);
       try {

@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PharmaShift · QR ติดผนัง</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Prompt:wght@400;500;600&family=IBM+Plex+Sans+Thai+Looped:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="style.css">
+<style>
+  body{background:#E9EBF5;color:#161A35}
+  .bar{max-width:210mm;margin:16px auto;display:flex;gap:10px;justify-content:center;flex-wrap:wrap;padding:0 16px}
+  .sheet{width:210mm;max-width:calc(100% - 32px);min-height:280mm;margin:0 auto 24px;background:#fff;border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.12);padding:18mm 16mm;display:flex;flex-direction:column;align-items:center;gap:8mm;text-align:center;color:#161A35}
+  .hd{display:flex;align-items:center;gap:12px}
+  .hd svg{width:56px;height:56px}
+  .hd b{font:600 26px var(--display);text-align:left;line-height:1.2}
+  .hd span{display:block;font:400 16px var(--body);color:#5D6480}
+  h1{font:600 40px var(--display);color:#1E2A80}
+  .qr{border:6px solid #1E2A80;border-radius:24px;padding:8mm;background:#fff}
+  .qr img{width:120mm;max-width:70vw;height:auto;image-rendering:pixelated;display:block}
+  .steps{display:flex;gap:6mm;justify-content:center;flex-wrap:wrap;font:500 17px var(--body)}
+  .steps div{background:#FFF2E6;color:#A8381E;border-radius:14px;padding:4mm 6mm}
+  .note{font-size:13px;color:#5D6480;max-width:150mm}
+  .msg{max-width:520px;margin:20vh auto;text-align:center}
+  @media print{
+    body{background:#fff}
+    .bar{display:none}
+    .sheet{box-shadow:none;border-radius:0;margin:0;width:auto;max-width:none;min-height:auto}
+    @page{size:A4;margin:10mm}
+  }
+</style>
+</head>
+<body>
+<div id="root"><div class="msg"><div class="spinner" style="margin:0 auto"></div></div></div>
+<script src="config.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js"></script>
+<script src="common.js"></script>
+<script>
+(async function () {
+  const { CFG, esc, errMsg } = window.PS;
+  const root = document.getElementById('root');
+  const sb = supabase.createClient(CFG.SUPABASE_URL, CFG.SUPABASE_ANON_KEY, { auth: { persistSession: true, autoRefreshToken: true, storageKey: 'pharmashift-auth' } });
+  const b = new URLSearchParams(location.search).get('b');
+  const fail = (m) => { root.innerHTML = `<div class="msg card"><h2>ยังปริ้นไม่ได้</h2><p class="muted">${esc(m)}</p><a class="btn primary" href="./">กลับไปที่แอป</a></div>`; };
+  if (!b) return fail('ไม่พบสาขา');
+  const { data: { session } } = await sb.auth.getSession();
+  if (!session) return fail('กรุณาเปิดแอป PharmaShift ในเบราว์เซอร์นี้และเข้าสู่ระบบก่อน แล้วกดปุ่ม "ปริ้น QR ติดผนัง" อีกครั้ง');
+  const { data, error } = await sb.rpc('static_qr', { p_branch: b });
+  if (error) return fail(errMsg(error));
+  const q = qrcode(0, 'M'); q.addData(`https://liff.line.me/${CFG.LIFF_ID}?ps=${encodeURIComponent(data.payload)}`); q.make();
+  root.innerHTML = `
+    <div class="bar"><button class="btn primary" onclick="window.print()">พิมพ์ / บันทึกเป็น PDF</button><a class="btn" href="./">กลับไปที่แอป</a></div>
+    <div class="sheet">
+      <div class="hd"><svg><use href="#logo"/></svg><b>${esc(data.org)}<span>${esc(data.branch)}</span></b></div>
+      <h1>สแกนเพื่อเข้างาน / ออกงาน</h1>
+      <div class="qr"><img src="${q.createDataURL(10, 0)}" alt="QR ลงเวลา"></div>
+      <div class="steps"><div>1. เปิดกล้องมือถือ</div><div>2. สแกน QR นี้</div><div>3. อนุญาตตำแหน่ง (GPS)</div></div>
+      <p class="note">สแกนได้เฉพาะเมื่ออยู่ในร้าน (ระยะไม่เกิน ${esc(data.radius)} เมตร) · ถ้า QR นี้ถูกถ่ายส่งต่อหรือสูญหาย ให้เจ้าของร้านกด "เปลี่ยนรหัสลับของสาขา" ในแอป แล้วปริ้นใหม่</p>
+      <p class="note">PharmaShift · ลงเวร ลงเวลา ร้านยา</p>
+    </div>`;
+})();
+</script>
+</body>
+</html>
