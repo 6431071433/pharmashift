@@ -42,11 +42,18 @@
   }
   function getPos() {
     return new Promise((res) => {
-      if (!navigator.geolocation) return res(null);
-      navigator.geolocation.getCurrentPosition((p) => res({ lat: p.coords.latitude, lng: p.coords.longitude, acc: p.coords.accuracy }), () => res(null), { enableHighAccuracy: true, timeout: 8000, maximumAge: 30000 });
+      if (!navigator.geolocation) { S.gpsErr = 'none'; return res(null); }
+      navigator.geolocation.getCurrentPosition((p) => { S.gpsErr = null; res({ lat: p.coords.latitude, lng: p.coords.longitude, acc: p.coords.accuracy }); }, (e) => { S.gpsErr = e && e.code === 1 ? 'denied' : 'fail'; res(null); }, { enableHighAccuracy: true, timeout: 10000, maximumAge: 30000 });
     });
   }
 
+  function gpsHelp() {
+    sheet('เปิดตำแหน่ง (GPS) ให้ LINE', `<p class="small">${S.gpsErr === 'denied' ? 'เครื่องนี้ปิดสิทธิ์ตำแหน่งของ LINE ไว้ หน้าต่างขออนุญาตจึงไม่ขึ้น' : 'ยังอ่านตำแหน่งของเครื่องไม่ได้'} ทำตามนี้ครั้งเดียว:</p>
+      <b class="small">iPhone</b><ol class="small" style="margin:0;padding-left:20px"><li>ตั้งค่า → ความเป็นส่วนตัวและความปลอดภัย → บริการหาตำแหน่ง → <b>เปิด</b></li><li>เลื่อนหา <b>LINE</b> → เลือก <b>ขณะใช้แอป</b> และเปิด <b>ตำแหน่งที่แม่นยำ</b></li></ol>
+      <b class="small">Android</b><ol class="small" style="margin:0;padding-left:20px"><li>ดึงแถบบนลงมา → เปิด <b>ตำแหน่ง</b></li><li>ตั้งค่า → แอป → <b>LINE</b> → สิทธิ์ → ตำแหน่ง → <b>อนุญาตขณะใช้แอป</b></li></ol>
+      <p class="small muted">จากนั้นปิดแอปนี้ แล้วสแกน QR ใหม่ ถ้ามีหน้าต่างถาม ให้กด "อนุญาต"</p>
+      <button class="btn primary block" data-act="testGps">${ic('map-pin')}ทดสอบตำแหน่งตอนนี้</button>`);
+  }
   function statusOf(s, last) {
     const st = mins(s.start_time), g = grace(), N = nowMins(S.tz);
     if (last && isToday(last.at)) {
@@ -112,6 +119,7 @@
     S.tz = S.org.timezone || 'Asia/Bangkok';
     S.month = today().slice(0, 7); S.sel = today(); S.tab = S.tab && S.tab !== 'onboard' ? S.tab : 'home';
     await loadData();
+    try { subscribeRealtime(); } catch (_) {}
     if (S.isFriend == null && S.app && S.app.line_oa_id) { try { S.isFriend = (await liff.getFriendship()).friendFlag; } catch (_) { S.isFriend = null; } }
     render();
     if (S.pendingPS) { const p = S.pendingPS; S.pendingPS = null; handlePS(p); }
@@ -341,9 +349,10 @@
         <label class="row small"><input type="checkbox" id="oClip" ${S.org.clip_to_shift ? 'checked' : ''}> คิดชั่วโมงไม่เกินเวลาเวร (ทำเกินเวรเป็น OT ต้องอนุมัติก่อนจ่าย)</label>
         <label class="field">ไม่นับส่วนที่เกินเวรน้อยกว่า<select id="oOtMin">${[0, 10, 15, 30].map((n) => `<option value="${n}" ${(S.org.ot_min_minutes ?? 15) === n ? 'selected' : ''}>${n ? n + ' นาที' : 'นับทุกนาที'}</option>`).join('')}</select></label>
         <label class="row small"><input type="checkbox" id="oSelf" ${S.org.allow_self_approve ? 'checked' : ''}> ให้ผู้จัดการอนุมัติคำขอของตัวเองได้ (เจ้าของร้านอนุมัติได้เสมอ)</label>
+        <label class="row small"><input type="checkbox" id="oGps" ${S.org.require_gps ? 'checked' : ''}> บังคับเปิดตำแหน่ง (GPS) ทุกครั้งที่สแกน (ไม่เปิด = สแกนไม่ได้)</label>
         <button class="btn primary" data-act="saveOrg">${ic('check')}บันทึก</button>
         <div class="stack small" style="border-top:1px solid var(--line);padding-top:12px"><b>ลิงก์แอปสำหรับพนักงาน</b><div class="row"><span class="code" style="font-size:12px;letter-spacing:0;overflow:hidden;text-overflow:ellipsis">${esc(liffUrl)}</span><button class="btn ghost" data-act="copy" data-text="${esc(liffUrl)}">${ic('copy')}</button></div>
-        <b>ลิงก์จอที่ร้าน (เปิดบนโทรศัพท์ร้าน)</b><div class="row"><span class="code" style="font-size:12px;letter-spacing:0;overflow:hidden;text-overflow:ellipsis">${esc(kioskUrl)}</span><button class="btn ghost" data-act="copy" data-text="${esc(kioskUrl)}">${ic('copy')}</button></div><span class="muted" style="font-size:11px">เวอร์ชัน 2 พ.ย. 69 (แจ้งเตือน LINE · Excel · แลกเวร)</span></div></div>
+        <b>ลิงก์จอที่ร้าน (เปิดบนโทรศัพท์ร้าน)</b><div class="row"><span class="code" style="font-size:12px;letter-spacing:0;overflow:hidden;text-overflow:ellipsis">${esc(kioskUrl)}</span><button class="btn ghost" data-act="copy" data-text="${esc(kioskUrl)}">${ic('copy')}</button></div><span class="muted" style="font-size:11px">เวอร์ชัน 2 พ.ย. 69 (อัปเดตทันที · ยืนยันวันว่าง · ช่วยเปิด GPS)</span></div></div>
       <div class="card"><div class="card-head"><div class="row"><span class="icon-chip t-sky">${ic('map-pin')}</span><h2>สาขา</h2></div><button class="btn" data-act="editBranch">${ic('plus')}เพิ่มสาขา</button></div>`;
     if (!S.branches.length) h += `<p class="small muted">ยังไม่มีสาขา กด "เพิ่มสาขา" เพื่อเริ่ม</p>`;
     for (const br of S.branches) h += `<div class="list-row" style="flex-wrap:wrap"><div class="grow"><b>${esc(br.name)}</b>${br.active ? '' : ' <span class="pill wait">ปิดใช้งาน</span>'}<br><span class="small muted">${t5(br.open_time)}–${t5(br.close_time)}${br.lat != null ? ' · ตั้งตำแหน่งแล้ว' : ' · ยังไม่ตั้งตำแหน่ง'}</span></div><button class="btn ghost" data-act="pairKiosk" data-id="${br.id}">${ic('monitor-smartphone')}จับคู่จอ QR</button>${br.allow_static ? `<a class="btn ghost" href="print.html?b=${br.id}" target="_blank" rel="noopener">${ic('printer')}ปริ้น QR ติดผนัง</a>` : ''}<button class="btn ghost" data-act="editBranch" data-id="${br.id}" aria-label="แก้ไขสาขา">${ic('pencil')}</button></div>`;
@@ -432,7 +441,7 @@
   }
   function staffCal() {
     const me = M(S.me.member_id), [a, b] = monthRange(S.month), t = today(), canAvail = isPharm(me) && me.employment === 'parttime';
-    const availSet = new Set(S.avail.filter((x) => x.member_id === S.me.member_id).map((x) => x.work_date));
+    const availSet = S.ptMode === 'avail' && S.draft ? S.draft : new Set(S.avail.filter((x) => x.member_id === S.me.member_id).map((x) => x.work_date));
     let g = DOW.map((x) => `<div class="dow">${x.replace('.', '')}</div>`).join('');
     for (let i = 0; i < dow(a); i++) g += `<div class="mcell blank"></div>`;
     for (let d = a; d <= b; d = addDays(d, 1)) {
@@ -448,7 +457,12 @@
     let h = `<div class="between">${monthNav()}</div>`;
     if (canAvail) h += `<div class="seg"><button data-act="ptMode" data-m="view" aria-pressed="${S.ptMode !== 'avail'}">${ic('eye')}ดูเวร</button><button data-act="ptMode" data-m="avail" aria-pressed="${S.ptMode === 'avail'}">${ic('hand')}แจ้งวันว่าง</button></div>`;
     h += `<div class="card"><div class="mini">${g}</div><div class="legend"><span><i style="background:var(--${tone(me.color)})"></i>เวรของฉัน</span>${canAvail ? '<span><i style="box-shadow:inset 0 0 0 2px var(--brand)"></i>แจ้งว่าว่าง</span>' : ''}${isPharm(me) ? '<span><i style="background:var(--coral);border-radius:50%"></i>มีเวรว่าง</span>' : ''}<span><i style="background:var(--warn-soft)"></i>ขอลาแล้ว</span></div></div>`;
-    if (S.ptMode === 'avail' && canAvail) return h + `<div class="card small" style="flex-direction:row;align-items:center"><span class="icon-chip t-brand">${ic('hand')}</span>แตะวันที่สะดวกมาทำงาน แตะซ้ำเพื่อยกเลิก เจ้าของร้านจะเห็นตอนจัดเวร</div>`;
+    if (S.ptMode === 'avail' && canAvail) {
+      const mine = new Set(S.avail.filter((x) => x.member_id === S.me.member_id).map((x) => x.work_date)), dr = S.draft || mine;
+      const changed = [...dr].some((x) => !mine.has(x)) || [...mine].some((x) => !dr.has(x) && x >= t);
+      return h + `<div class="card small" style="flex-direction:row;align-items:center"><span class="icon-chip t-brand">${ic('hand')}</span>แตะเลือกวันที่สะดวกมาทำงาน (แตะซ้ำเพื่อเอาออก) แล้วกด "ยืนยันวันว่าง"</div>
+        <div class="card" style="position:sticky;bottom:84px;z-index:5;flex-direction:row;align-items:center;gap:8px;border:1.5px solid var(--brand)"><span class="grow small">เลือกไว้ <b>${[...dr].filter((x) => x >= t).length}</b> วันในอนาคต${changed ? ' · <b>ยังไม่ได้บันทึก</b>' : ''}</span>${changed ? `<button class="btn" data-act="cancelAvail">ยกเลิก</button>` : ''}<button class="btn primary" data-act="saveAvail" ${changed ? '' : 'disabled'}>${ic('check')}ยืนยันวันว่าง</button></div>`;
+    }
     const d = S.sel;
     h += `<h3>${dLong(d)}</h3>`;
     for (const s of myShifts().filter((x) => x.work_date === d)) {
@@ -523,10 +537,10 @@
       const r = await rpc('clock', { p_payload: ps, p_kind: kind, p_lat: pos?.lat ?? null, p_lng: pos?.lng ?? null, p_acc: pos?.acc ?? null });
       if (kind === 'out' && note && note.trim()) { try { await rpc('post_handover', { p_branch: ps.split('|')[1], p_body: note.trim() }); } catch (_) { /* ไม่ขัดการออกงาน */ } }
       layer(`<div class="overlay" data-act="close">${confettiHTML()}<svg class="okmark" viewBox="0 0 120 120" aria-hidden="true"><circle cx="60" cy="60" r="52" fill="var(--ok-soft)" stroke="var(--ok)" stroke-width="6"/><path d="M38 62l15 15 30-32" fill="none" stroke="var(--ok)" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        <h1>${kind === 'in' ? 'เข้างานเรียบร้อย!' : 'ออกงานเรียบร้อย!'}</h1><div style="font:500 36px var(--display)">${fmtTime(r.at, S.tz)}</div><span class="muted">${esc(r.branch)} · ${kind === 'in' ? 'ขอให้วันนี้เป็นวันที่ดีนะ' : 'เดินทางกลับปลอดภัยนะ'}</span>${r.far ? `<span class="pill warn">${ic('map-pin-off')}ตำแหน่งห่างร้าน ${fmtDist(r.distance_m)} · เจ้าของร้านจะเห็นธงเตือน</span>` : ''}</div>`);
-      setTimeout(closeLayer, 2800);
+        <h1>${kind === 'in' ? 'เข้างานเรียบร้อย!' : 'ออกงานเรียบร้อย!'}</h1><div style="font:500 36px var(--display)">${fmtTime(r.at, S.tz)}</div><span class="muted">${esc(r.branch)} · ${kind === 'in' ? 'ขอให้วันนี้เป็นวันที่ดีนะ' : 'เดินทางกลับปลอดภัยนะ'}</span>${r.far ? `<span class="pill warn">${ic('map-pin-off')}ตำแหน่งห่างร้าน ${fmtDist(r.distance_m)} · เจ้าของร้านจะเห็นธงเตือน</span>` : ''}${!pos ? `<span class="pill warn">${ic('map-pin-off')}ไม่ได้ส่งตำแหน่ง · เจ้าของร้านจะเห็นว่าไม่มีพิกัด</span>` : ''}</div>`);
+      if (!pos) setTimeout(() => { closeLayer(); gpsHelp(); }, 2500); else setTimeout(closeLayer, 2800);
       await refresh();
-    } catch (e) { closeLayer(); toast(errMsg(e), 'err'); }
+    } catch (e) { closeLayer(); const m = errMsg(e); if (/GPS|ตำแหน่ง/.test(m) && S.gpsErr) gpsHelp(); toast(m, 'err'); }
   }
 
   // ---------- actions ----------
@@ -538,7 +552,7 @@
     refresh: () => refresh(),
     month: async (d) => { S.month = shiftMonth(S.month, Number(d.n)); const [a] = monthRange(S.month); S.sel = S.month === today().slice(0, 7) ? today() : a; await refresh(); },
     pick: (d) => { S.sel = d.d; render(); if (S.isOwner && innerWidth < 900) document.getElementById('day')?.scrollIntoView({ behavior: 'smooth' }); },
-    ptMode: (d) => { S.ptMode = d.m; render(); },
+    ptMode: (d) => { if (S.draft && d.m !== 'avail') S.draft = null; S.ptMode = d.m; render(); },
     copy: (d) => copy(d.text),
     copyInvite: (d) => { const m = M(d.id); copy(`สวัสดีครับคุณ${shortName(m.display_name)} เชิญเข้าใช้ระบบลงเวร ลงเวลาของร้าน ${S.org.name}\n1) เปิดลิงก์นี้ใน LINE: https://liff.line.me/${CFG.LIFF_ID}\n2) กด "มีรหัสเชิญจากร้าน" แล้วใส่รหัส: ${S.invites[d.id]}`); },
     menu: () => {
@@ -565,15 +579,24 @@
     scan: async (d) => { const note = val('note'); const text = await scanQR(); if (!text) return; const ps = extractPS(text); if (!ps) return toast('QR นี้ไม่ใช่ QR ลงเวลาของร้าน', 'err'); if (d.kind === 'out' || inNow(S.myLast)) return doClock(ps, 'out', note); return doClock(ps, 'in'); },
     confirmOut: () => { const note = val('note2'); doClock(S.outPS, 'out', note); },
     claim: async (d, el) => { busyBtn(el, true); try { await rpc('claim_open_shift', { p_open: d.id }); toast('ส่งคำขอรับเวรแล้ว รอเจ้าของอนุมัติ'); await refresh(); } catch (e) { busyBtn(el, false); toast(errMsg(e), 'err'); } },
-    toggleAvail: async (d) => {
+    toggleAvail: (d) => {
       if (d.d < today()) return;
-      const has = S.avail.some((x) => x.member_id === S.me.member_id && x.work_date === d.d);
-      try {
-        if (has) { await q(sb.from('availability').delete().eq('member_id', S.me.member_id).eq('work_date', d.d)); S.avail = S.avail.filter((x) => !(x.member_id === S.me.member_id && x.work_date === d.d)); }
-        else { await q(sb.from('availability').insert({ member_id: S.me.member_id, work_date: d.d })); S.avail.push({ member_id: S.me.member_id, work_date: d.d }); }
-        render();
-      } catch (e) { toast(errMsg(e), 'err'); }
+      if (!S.draft) S.draft = new Set(S.avail.filter((x) => x.member_id === S.me.member_id).map((x) => x.work_date));
+      if (S.draft.has(d.d)) S.draft.delete(d.d); else S.draft.add(d.d);
+      const y = window.scrollY; render(); window.scrollTo(0, y);
     },
+    cancelAvail: () => { S.draft = null; render(); },
+    saveAvail: async (d, el) => {
+      const t = today(), mine = new Set(S.avail.filter((x) => x.member_id === S.me.member_id).map((x) => x.work_date)), dr = S.draft || mine;
+      const add = [...dr].filter((x) => !mine.has(x) && x >= t), del = [...mine].filter((x) => !dr.has(x) && x >= t);
+      busyBtn(el, true);
+      try {
+        if (add.length) await q(sb.from('availability').insert(add.map((w) => ({ member_id: S.me.member_id, work_date: w }))));
+        if (del.length) await q(sb.from('availability').delete().eq('member_id', S.me.member_id).in('work_date', del));
+        S.draft = null; toast(`บันทึกวันว่างแล้ว (${[...dr].filter((x) => x >= t).length} วัน)`); await refresh();
+      } catch (e) { busyBtn(el, false); toast(errMsg(e), 'err'); }
+    },
+    testGps: async (d, el) => { busyBtn(el, true); const p = await getPos(); busyBtn(el, false); if (p) { closeLayer(); toast(`อ่านตำแหน่งได้แล้ว (แม่นยำ ±${Math.round(p.acc)} ม.)`); } else toast(S.gpsErr === 'denied' ? 'ยังถูกปิดสิทธิ์อยู่ ทำตามขั้นตอนด้านบนก่อน' : 'ยังอ่านตำแหน่งไม่ได้ ลองออกไปที่โล่งหรือเปิด Wi-Fi', 'err'); },
     leaveSheet: (d) => { const s = S.shifts.find((x) => x.id === d.id); sheet('ขอลา · ' + dShort(s.work_date), `<p class="small muted">${esc(B(s.branch_id).name)} · ${t5(s.start_time)}–${t5(s.end_time)}</p><label class="field">เหตุผล (ไม่บังคับ)<input id="lvReason" placeholder="เช่น ธุระครอบครัว"></label><button class="btn primary block" data-act="sendLeave" data-id="${s.id}">${ic('send')}ส่งคำขอลา</button>`); },
     sendLeave: async (d, el) => { busyBtn(el, true); try { await rpc('request_leave', { p_shift: d.id, p_reason: val('lvReason') || null }); closeLayer(); toast('ส่งคำขอลาแล้ว'); await refresh(); } catch (e) { busyBtn(el, false); toast(errMsg(e), 'err'); } },
     fixSheet: (d = {}) => {
@@ -614,7 +637,7 @@
     decideLeave: async (d, el) => { busyBtn(el, true); try { await rpc('decide_leave', { p_id: d.id, p_approve: d.ok === '1' }); toast(d.ok === '1' ? 'อนุมัติลาแล้ว' : 'ไม่อนุมัติ'); await refresh(); } catch (e) { busyBtn(el, false); toast(errMsg(e), 'err'); } },
     decideOt: async (d, el) => { busyBtn(el, true); try { await rpc('decide_ot', { p_member: d.m, p_date: d.d, p_approve: d.ok === '1' }); toast(d.ok === '1' ? 'อนุมัติ OT แล้ว' : 'ไม่อนุมัติ OT · คิดเฉพาะในเวลาเวร'); await refresh(); } catch (e) { busyBtn(el, false); toast(errMsg(e), 'err'); } },
     decideFix: async (d, el) => { busyBtn(el, true); try { await rpc('decide_fix', { p_id: d.id, p_approve: d.ok === '1' }); toast('บันทึกแล้ว'); await refresh(); } catch (e) { busyBtn(el, false); toast(errMsg(e), 'err'); } },
-    saveOrg: async (d, el) => { busyBtn(el, true); try { await q(sb.from('orgs').update({ name: val('oName').trim(), grace_minutes: Number(val('oGrace')), clip_to_shift: document.getElementById('oClip').checked, ot_min_minutes: Number(val('oOtMin')), allow_self_approve: document.getElementById('oSelf').checked, require_shift: document.getElementById('oReq').checked, early_minutes: Number(val('oEarly')) }).eq('id', S.me.org_id)); toast('บันทึกแล้ว'); await loadOrgs(S.me.org_id); } catch (e) { busyBtn(el, false); toast(errMsg(e), 'err'); } },
+    saveOrg: async (d, el) => { busyBtn(el, true); try { await q(sb.from('orgs').update({ name: val('oName').trim(), grace_minutes: Number(val('oGrace')), clip_to_shift: document.getElementById('oClip').checked, ot_min_minutes: Number(val('oOtMin')), allow_self_approve: document.getElementById('oSelf').checked, require_shift: document.getElementById('oReq').checked, early_minutes: Number(val('oEarly')), require_gps: document.getElementById('oGps').checked }).eq('id', S.me.org_id)); toast('บันทึกแล้ว'); await loadOrgs(S.me.org_id); } catch (e) { busyBtn(el, false); toast(errMsg(e), 'err'); } },
     editBranch: (d) => branchSheet(d.id),
     useHere: async (d, el) => {
       busyBtn(el, true); const pos = await getPos(); busyBtn(el, false);
@@ -749,8 +772,20 @@
   };
   document.addEventListener('click', (e) => { const el = e.target.closest('[data-act]'); if (!el || el.disabled) return; const fn = ACT[el.dataset.act]; if (fn) fn(el.dataset, el, e); });
   document.addEventListener('change', (e) => { const el = e.target.closest('[data-change]'); if (el && CHANGE[el.dataset.change]) CHANGE[el.dataset.change](el); });
+  const idle = () => S.me && document.visibilityState === 'visible' && !$layer.innerHTML && !S.draft && !(document.activeElement && /INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName));
+  let rtTimer = null;
+  const softRefresh = () => { clearTimeout(rtTimer); rtTimer = setTimeout(() => { if (idle()) { const y = window.scrollY; refresh().then(() => window.scrollTo(0, y)); } else S.stale = true; }, 700); };
+  function subscribeRealtime() {
+    if (S.rtOrg === S.me.org_id) return;
+    try { if (S.rt) sb.removeChannel(S.rt); } catch (_) {}
+    S.rtOrg = S.me.org_id;
+    const ch = sb.channel('org-' + S.me.org_id);
+    ['attendance', 'shifts', 'open_shifts', 'leave_requests', 'attendance_fixes', 'shift_swaps', 'handover_notes'].forEach((t) => ch.on('postgres_changes', { event: '*', schema: 'public', table: t, filter: 'org_id=eq.' + S.me.org_id }, softRefresh));
+    ['shift_claims', 'availability'].forEach((t) => ch.on('postgres_changes', { event: '*', schema: 'public', table: t }, softRefresh));
+    S.rt = ch.subscribe();
+  }
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && S.me) refresh(); });
-  setInterval(() => { if (S.me && S.isOwner && S.tab === 'home' && document.visibilityState === 'visible' && !$layer.innerHTML) refresh(); }, 60000);
+  setInterval(() => { if (idle() && (S.stale || S.tab === 'home' || S.tab === 'req')) { S.stale = false; const y = window.scrollY; refresh().then(() => window.scrollTo(0, y)); } }, 30000);
 
   boot();
 })();
