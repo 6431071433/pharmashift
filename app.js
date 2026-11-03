@@ -89,10 +89,10 @@
   const issueRow = (x, showDay = true) => `<button class="iss-row ${x.sev}" data-act="goIssue" data-d="${x.d}"><span class="dotc"></span><span class="grow"><b>${esc(x.text)}</b><br><span class="tiny muted">${showDay ? dShort(x.d) + ' · ' : ''}${esc(x.sub || '')}</span></span>${showDay ? ic('chevron-right') : ''}</button>`;
   function issueCard() {
     if (!S.branches.length || !S.shifts.length) return '';
-    const t = today(), list = scheduleIssues(t, addDays(t, 13)), al = list.filter((x) => x.sev === 'alert').length;
+    const t = today(), list = scheduleIssues(t, addDays(t, 13)).sort((x, y) => (x.sev === y.sev ? 0 : x.sev === 'alert' ? -1 : 1)), al = list.filter((x) => x.sev === 'alert').length;
     if (!list.length) return `<div class="card iss-ok"><div class="row"><span class="icon-chip t-teal">${ic('shield-check')}</span><div class="grow"><b>ตาราง 14 วันข้างหน้าเรียบร้อย</b><br><span class="small muted">มีเภสัชกรครบทุกช่วงที่เปิด ไม่มีเวรชน ไม่มีใครทำงานเกิน</span></div></div></div>`;
     return `<div class="card"><div class="card-head"><div class="row"><span class="icon-chip ${al ? 't-coral' : 't-sun'}">${ic('shield-alert')}</span><div><h2>ตรวจตาราง</h2><span class="tiny muted">14 วันข้างหน้า</span></div></div><div class="row">${al ? `<span class="pill alert">ต้องแก้ ${al}</span>` : ''}${list.length - al ? `<span class="pill warn">ควรดู ${list.length - al}</span>` : ''}</div></div>
-      <div class="stack" style="gap:6px">${list.slice(0, 4).map((x) => issueRow(x)).join('')}</div>${list.length > 4 ? `<button class="btn ghost" data-act="issuesAll">ดูทั้งหมด ${list.length} รายการ</button>` : ''}</div>`;
+      <div class="stack" style="gap:6px">${list.slice(0, 3).map((x) => issueRow(x)).join('')}</div>${list.length > 3 ? `<button class="btn ghost" data-act="issuesAll">ดูทั้งหมด ${list.length} รายการ</button>` : ''}</div>`;
   }
   const fmtDist = (m) => (m < 1000 ? `${m} ม.` : `${(m / 1000).toFixed(1)} กม.`);
   function geoFlag(a) {
@@ -332,24 +332,25 @@
     const opens = S.branches.filter((b) => b.active);
     const o = opens.length ? opens.map((b) => t5(b.open_time)).sort()[0] : '09:00', c = opens.length ? opens.map((b) => t5(b.close_time)).sort().slice(-1)[0] : '21:00';
     const pend = S.claims.length + S.leaves.length + S.fixes.length + S.ot.length + ownerSwaps().length + ownerSreqs().length, fo = S.open.filter((x) => x.work_date >= t).length;
-    let h = `<div class="hello"><div class="stack"><h1>${greet(S.tz)}ครับ</h1><p class="muted">${dLong(t)}</p></div><div class="arcbox">${dayArc(o, c, S.tz)}</div></div>
-      <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr))">
-        <button class="card" data-act="tab" data-tab="cal" style="flex-direction:row;align-items:center;border:0;text-align:left;cursor:pointer"><span class="icon-chip t-coral">${ic('calendar-x')}</span><span><b style="font:500 24px var(--display)">${fo}</b><br><span class="small muted">เวรว่างที่ยังไม่มีคนรับ</span></span></button>
-        <button class="card" data-act="tab" data-tab="req" style="flex-direction:row;align-items:center;border:0;text-align:left;cursor:pointer"><span class="icon-chip t-sun">${ic('bell-ring')}</span><span><b style="font:500 24px var(--display)">${pend}</b><br><span class="small muted">คำขอรออนุมัติ</span></span></button>
-        <button class="card" data-act="tab" data-tab="set" style="flex-direction:row;align-items:center;border:0;text-align:left;cursor:pointer"><span class="icon-chip t-lilac">${ic('users')}</span><span><b style="font:500 24px var(--display)">${S.members.filter((m) => m.active).length}</b><br><span class="small muted">คนในร้าน</span></span></button>
-      </div>` + setupCard() + issueCard() + friendBanner() + swapCards();
+    const N0 = nowMins(S.tz), todayS = S.shifts.filter((s) => s.work_date === t);
+    const working = Object.values(la).filter((a) => inNow(a)).length;
+    const late = todayS.filter((s) => { const st = statusOf(s, la[s.member_id]); return st.c === 'alert' || (st.c === 'warn' && !inNow(la[s.member_id])); }).length;
+    const openNow = opens.filter((b) => N0 >= mins(b.open_time) && N0 < mins(b.close_time)).length;
+    const kpi = (tab, tone, icn, n, label, hot) => `<button class="kpi ${hot ? 'hot ' + tone : ''}" data-act="tab" data-tab="${tab}"><span class="icon-chip ${tone}">${ic(icn)}</span><b>${n}</b><span>${label}</span></button>`;
+    let h = `<div class="ohead"><div><h1>${greet(S.tz)}ครับ</h1><p class="muted">${dLong(t)} · ${opens.length ? (openNow ? `เปิดอยู่ ${openNow}/${opens.length} สาขา` : 'ร้านปิดอยู่') : 'ยังไม่มีสาขา'}</p></div></div>
+      <div class="kpis">${kpi('home', 't-teal', 'user-check', working, 'กำลังทำงาน')}${kpi('home', 't-coral', 'alarm-clock', late, 'สาย / ยังไม่เข้า', late > 0)}${kpi('req', 't-sun', 'bell-ring', pend, 'คำขอรออนุมัติ', pend > 0)}${kpi('cal', 't-lilac', 'calendar-x', fo, 'เวรว่าง', fo > 0)}</div>` + setupCard() + swapCards() + friendBanner();
     if (!S.branches.length) return h + `<div class="card" style="align-items:flex-start"><span class="icon-chip t-brand">${ic('map-pin')}</span><h2>เริ่มจากเพิ่มสาขาแรก</h2><p class="muted">ใส่ชื่อสาขาและเวลาเปิด–ปิด แล้วเพิ่มพนักงาน</p><button class="btn primary" data-act="tab" data-tab="set">${ic('settings')}ไปที่ตั้งค่าร้าน</button></div>`;
     h += `<div class="card"><div class="card-head"><div class="row"><span class="icon-chip t-brand">${ic('store')}</span><h2>ตอนนี้ที่ร้าน</h2></div><button class="btn ghost" data-act="refresh">${ic('rotate-cw')}รีเฟรช</button></div><div class="grid">`;
     for (const br of opens) {
       const N = nowMins(S.tz), isOpen = N >= mins(br.open_time) && N < mins(br.close_time);
       const sch = S.shifts.filter((s) => s.work_date === t && s.branch_id === br.id);
       const present = Object.values(la).filter((a) => a.branch_id === br.id && inNow(a) && !sch.some((s) => s.member_id === a.member_id));
-      let rows = sch.map((s) => { const st = statusOf(s, la[s.member_id]); const m = M(s.member_id); return `<div class="row">${avatar(m.display_name, m.color)}<div class="grow"><b>${esc(m.display_name)}</b><br><span class="tiny muted">${esc(ROLE[m.role])} · ${t5(s.start_time)}–${t5(s.end_time)}</span></div><span class="pill ${st.c}">${ic(st.i)}${st.t}</span></div>${geoFlag(la[s.member_id])}`; }).join('');
-      rows += present.map((a) => { const m = M(a.member_id); return `<div class="row">${avatar(m.display_name, m.color)}<div class="grow"><b>${esc(m.display_name)}</b><br><span class="tiny muted">${esc(ROLE[m.role])} · ไม่มีเวรในตาราง</span></div><span class="pill ok">${ic('check')}เข้างาน ${fmtTime(a.at, S.tz)}</span></div>${geoFlag(a)}`; }).join('');
+      let rows = sch.map((s) => { const st = statusOf(s, la[s.member_id]); const m = M(s.member_id); return `<div class="liverow">${avatar(m.display_name, m.color)}<div class="grow"><b>${esc(m.display_name)}</b><span class="small muted">${esc(ROLE[m.role])} · ${t5(s.start_time)}–${t5(s.end_time)}</span></div><span class="pill ${st.c}">${ic(st.i)}${st.t}</span></div>${geoFlag(la[s.member_id])}`; }).join('');
+      rows += present.map((a) => { const m = M(a.member_id); return `<div class="liverow">${avatar(m.display_name, m.color)}<div class="grow"><b>${esc(m.display_name)}</b><span class="small muted">${esc(ROLE[m.role])} · ไม่มีเวรในตาราง</span></div><span class="pill ok">${ic('check')}เข้างาน ${fmtTime(a.at, S.tz)}</span></div>${geoFlag(a)}`; }).join('');
       if (!rows) rows = `<p class="small muted">วันนี้ยังไม่มีเวรในตาราง</p>`;
       h += `<div class="card" style="box-shadow:none;border:1.5px solid var(--line)"><div class="row"><div class="grow"><h3>${esc(br.name)}</h3><span class="tiny muted">${t5(br.open_time)}–${t5(br.close_time)}</span></div><span class="open-badge ${isOpen ? '' : 'closed'}">${isOpen ? '<span class="pulse"></span>เปิดอยู่' : 'ปิดอยู่'}</span></div>${ribbon(br.open_time, br.close_time, S.tz)}${rows}</div>`;
     }
-    return h + `</div></div>`;
+    return h + `</div></div>` + issueCard();
   }
 
   // ---------- OWNER: calendar ----------
@@ -447,6 +448,7 @@
     if (nw2.length) toast('⚠ ' + nw2[0].text, nw2[0].sev === 'alert' ? 'err' : undefined);
   }
   function ownerCal() {
+    if (S.calView == null && narrow()) S.calView = 'list';
     if (S.calView === 'list') return viewSeg() + `<div class="card">${agenda(true)}</div>`;
     if (S.calView === 'grid') return viewSeg() + gridView();
     const [a, b] = monthRange(S.month), t = today(), fb = S.filter, all = fb === '0';
@@ -482,7 +484,7 @@
       const ss = S.shifts.filter((x) => x.work_date === d && x.branch_id === br.id), os = S.open.filter((x) => x.work_date === d && x.branch_id === br.id);
       h += `<div class="stack" style="background:var(--bg);border-radius:14px;padding:12px"><div class="between"><b>${esc(br.name)}</b><span class="tiny muted">${t5(br.open_time)}–${t5(br.close_time)}</span></div>`;
       if (!ss.length && !os.length) h += d >= t ? `<div class="nocover">${ic('triangle-alert')}<span class="grow"><b>ยังไม่มีคนเข้าเวร</b><br><span class="small">ร้านเปิด ${t5(br.open_time)}–${t5(br.close_time)} · เพิ่มเวรหรือประกาศเวรว่าง</span></span><button class="btn primary" data-act="addShift">${ic('plus')}เพิ่มเวร</button></div>` : `<span class="small muted">ไม่มีเวร</span>`;
-      for (const s of ss) { const m = M(s.member_id); h += `<div class="row">${avatar(m.display_name, m.color, 'sm')}<span class="small grow">${esc(m.display_name)}${m.employment === 'fulltime' && s.paid ? ' <span class="pill ok">เวรพิเศษ คิดรายชม.</span>' : ''}${s.note ? ` <span class="muted">· ${esc(s.note)}</span>` : ''}</span><span class="small muted">${t5(s.start_time)}–${t5(s.end_time)}</span>${d >= t ? `${s.member_id === S.me.member_id ? `<button class="btn ghost" data-act="swapSheet" data-id="${s.id}" aria-label="แลกเวร">${ic('repeat')}</button>` : ''}<button class="btn ghost" data-act="editShift" data-id="${s.id}" aria-label="แก้ไขเวร">${ic('pencil')}</button><button class="btn ghost" data-act="delShift" data-id="${s.id}" aria-label="ลบเวร">${ic('trash-2')}</button>` : ''}</div>`; }
+      for (const s of ss) { const m = M(s.member_id); h += `<div class="row">${avatar(m.display_name, m.color, 'sm')}<span class="grow" style="min-width:0;display:flex;flex-direction:column;line-height:1.35"><b class="small">${esc(m.display_name)}${m.employment === 'fulltime' && s.paid ? ' <span class="pill ok">เวรพิเศษ คิดรายชม.</span>' : ''}</b><span class="small muted">${t5(s.start_time)}–${t5(s.end_time)}${s.note ? ` · ${esc(s.note)}` : ''}</span></span>${d >= t ? `${s.member_id === S.me.member_id ? `<button class="btn ghost" data-act="swapSheet" data-id="${s.id}" aria-label="แลกเวร">${ic('repeat')}</button>` : ''}<button class="btn ghost" data-act="editShift" data-id="${s.id}" aria-label="แก้ไขเวร">${ic('pencil')}</button><button class="btn ghost" data-act="delShift" data-id="${s.id}" aria-label="ลบเวร">${ic('trash-2')}</button>` : ''}</div>`; }
       for (const o of os) {
         h += `<div class="small" style="color:var(--coral-deep)">${ic('circle-alert')} <b>เวรว่าง ${t5(o.start_time)}–${t5(o.end_time)}</b>${o.reason ? ' · ' + esc(o.reason) : ''}</div><div class="actions" style="display:flex;flex-wrap:wrap;gap:6px">`;
         for (const m of S.members.filter((x) => x.active && x.role === 'pharmacist' && canBranch(x, o.branch_id))) h += `<button class="btn ${avl.has(m.id) ? 'primary' : ''}" data-act="assign" data-open="${o.id}" data-m="${m.id}">${ic('user-plus')}${esc(shortName(m.display_name))}${avl.has(m.id) ? ' · ว่าง' : ''}</button>`;
@@ -650,7 +652,7 @@
       ['notify', 'bell-ring', 't-sun', 'แจ้งเตือนทาง LINE', Object.values(S.org.notify || {}).filter((v) => v === false).length ? 'ปิดบางรายการ' : 'เปิดทั้งหมด'],
     ];
     if (S.me.role === 'owner') items.push(['reset', 'trash-2', 't-coral', 'ล้างข้อมูล / ลบร้าน', 'ใช้หลังสาธิต หรือก่อนเริ่มใช้งานจริง']);
-    return `<h1>ตั้งค่า</h1>${setupCard(true)}<div class="card" style="padding:6px 14px">${items.map(([k, i, t, n, d]) => `<button class="setrow" data-act="setSec" data-v="${k}"><span class="icon-chip ${t}">${ic(i)}</span><span class="grow"><b>${n}</b><br><span class="small muted">${d}</span></span>${ic('chevron-right')}</button>`).join('')}</div><p class="tiny muted" style="text-align:center">เวอร์ชัน 3 พ.ย. 69 อ่านง่ายโหมดมืด (ลบสาขา · ตรวจตาราง)</p>`;
+    return `<h1>ตั้งค่า</h1>${setupCard(true)}<div class="card" style="padding:6px 14px">${items.map(([k, i, t, n, d]) => `<button class="setrow" data-act="setSec" data-v="${k}"><span class="icon-chip ${t}">${ic(i)}</span><span class="grow"><b>${n}</b><br><span class="small muted">${d}</span></span>${ic('chevron-right')}</button>`).join('')}</div><p class="tiny muted" style="text-align:center">เวอร์ชัน 3 พ.ย. 69 หน้าตาใหม่ (ลบสาขา · ตรวจตาราง)</p>`;
   }
   function ownerSetAll() {
     const liffUrl = `https://liff.line.me/${CFG.LIFF_ID}`, kioskUrl = new URL('kiosk.html', location.href).href;
@@ -668,7 +670,7 @@
               + opt('oPtAll', S.org.pt_see_all, 'พาร์ทไทม์เห็นตารางเวรของคนอื่น', 'ปิดไว้ = เห็นเฉพาะเวรตัวเองและเวรว่าง')); })()}
         <button class="btn primary" data-act="saveOrg">${ic('check')}บันทึก</button>
         <div class="stack small" style="border-top:1px solid var(--line);padding-top:12px"><b>ลิงก์แอปสำหรับพนักงาน</b><div class="row"><span class="code" style="font-size:12px;letter-spacing:0;overflow:hidden;text-overflow:ellipsis">${esc(liffUrl)}</span><button class="btn ghost" data-act="copy" data-text="${esc(liffUrl)}">${ic('copy')}</button></div>
-        <b>ลิงก์จอที่ร้าน (เปิดบนโทรศัพท์ร้าน)</b><div class="row"><span class="code" style="font-size:12px;letter-spacing:0;overflow:hidden;text-overflow:ellipsis">${esc(kioskUrl)}</span><button class="btn ghost" data-act="copy" data-text="${esc(kioskUrl)}">${ic('copy')}</button></div><span class="muted" style="font-size:12px">เวอร์ชัน 3 พ.ย. 69 อ่านง่ายโหมดมืด (ลบสาขา · ตรวจตาราง)</span></div></div>
+        <b>ลิงก์จอที่ร้าน (เปิดบนโทรศัพท์ร้าน)</b><div class="row"><span class="code" style="font-size:12px;letter-spacing:0;overflow:hidden;text-overflow:ellipsis">${esc(kioskUrl)}</span><button class="btn ghost" data-act="copy" data-text="${esc(kioskUrl)}">${ic('copy')}</button></div><span class="muted" style="font-size:12px">เวอร์ชัน 3 พ.ย. 69 หน้าตาใหม่ (ลบสาขา · ตรวจตาราง)</span></div></div>
       <div class="card" data-sec="branch"><div class="card-head"><div class="row"><span class="icon-chip t-sky">${ic('map-pin')}</span><h2>สาขา</h2></div><button class="btn" data-act="editBranch">${ic('plus')}เพิ่มสาขา</button></div>`;
     if (!S.branches.length) h += `<p class="small muted">ยังไม่มีสาขา กด "เพิ่มสาขา" เพื่อเริ่ม</p>`;
     for (const br of S.branches) h += `<div class="list-row" style="flex-wrap:wrap"><div class="grow"><b>${esc(br.name)}</b>${br.active ? '' : ' <span class="pill wait">ปิดใช้งาน</span>'}<br><span class="small muted">${t5(br.open_time)}–${t5(br.close_time)}${br.lat != null ? ' · ตั้งตำแหน่งแล้ว' : ' · ยังไม่ตั้งตำแหน่ง'}</span></div><button class="btn ghost" data-act="pairKiosk" data-id="${br.id}">${ic('monitor-smartphone')}จับคู่จอ QR</button>${br.allow_static ? `<a class="btn ghost" href="print.html?b=${br.id}" target="_blank" rel="noopener">${ic('printer')}ปริ้น QR ติดผนัง</a>` : ''}<button class="btn ghost" data-act="editBranch" data-id="${br.id}" aria-label="แก้ไขสาขา">${ic('pencil')}</button></div>`;

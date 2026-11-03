@@ -1,6 +1,6 @@
 /* PharmaShift · แนวคิด "เวรเช้า–เวรค่ำ": น้ำเงินคราม + ส้มพระอาทิตย์ขึ้น */
 :root{
-  --bg:#F5F6FB;--surface:#FFFFFF;--sunk:#ECEEF8;--ink:#161A35;--muted:#626985;--line:#DFE3F1;
+  --bg:#F5F6FB;--surface:#FFFFFF;--sunk:#ECEEF8;--ink:#161A35;--muted:#545B78;--line:#DFE3F1;
   --brand:#3346C8;--brand-deep:#1E2A80;--brand-soft:#E5E9FD;--on-brand:#FFFFFF;
   --sun:#FFC23D;--sun-deep:#855700;--sun-soft:#FFF2D2;
   --coral:#F2694A;--coral-deep:#A8381E;--coral-soft:#FFE6DE;
@@ -292,3 +292,28 @@ select option{background:var(--surface);color:var(--ink)}
 .availnote{display:flex;gap:10px;align-items:flex-start;border:1.5px dashed var(--line);border-radius:12px;padding:10px 12px;font-size:14px}
 .availnote>svg{width:20px;height:20px;flex:none;color:var(--muted)}
 .availnote.has{border:1.5px solid var(--ok);background:var(--ok-soft)}.availnote.has>svg{color:var(--ok)}
+/* หน้าตาใหม่: หัวหน้าเรียบ · ตัวเลขสำคัญ 4 ช่อง · แถวคนอ่านง่าย */
+.ohead{display:flex;align-items:flex-end;justify-content:space-between;gap:10px;padding:2px 2px 0}
+.ohead h1{font-size:24px}.ohead p{font-size:14px;margin-top:2px}
+.kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+@media (max-width:640px){.kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.kpi{display:grid;grid-template-columns:auto 1fr;grid-template-rows:auto auto;column-gap:10px;align-items:center;text-align:left;border:1.5px solid transparent;background:var(--surface);border-radius:18px;padding:12px 14px;box-shadow:var(--shadow);cursor:pointer;font:inherit;color:inherit;transition:transform .15s}
+.kpi:active{transform:scale(.97)}
+.kpi .icon-chip{grid-row:1/3;width:40px;height:40px}
+.kpi b{font:600 26px/1.1 var(--display)}
+.kpi span:last-child{font-size:13px;color:var(--muted);line-height:1.3}
+.kpi.hot.t-coral{border-color:var(--coral);background:var(--coral-soft)}.kpi.hot.t-coral b{color:var(--coral-deep)}
+.kpi.hot.t-sun{border-color:var(--sun)}.kpi.hot.t-lilac{border-color:var(--lilac)}
+.kpi.hot.t-sun,.kpi.hot.t-lilac{background:var(--surface)}
+.liverow{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:6px 0}
+.liverow .grow{flex:1 1 150px;min-width:0;display:flex;flex-direction:column;line-height:1.35}
+.liverow .grow .small{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.liverow .pill{margin-left:auto;white-space:normal;text-align:left}
+@media (max-width:480px){.liverow .pill{margin-left:46px}}
+.liverow + .liverow{border-top:1px solid var(--line)}
+/* อ่านง่ายขึ้นทั้งแอป */
+body{font-size:15.5px}
+.small{font-size:14px}.tiny{font-size:12.5px}
+.bnav button{font-size:12.5px}
+.bnav button svg.lucide{width:22px;height:22px}
+.card h2{font-size:18px}
