@@ -39,6 +39,8 @@
   const skel = (n = 3) => `<div class="skel-wrap">${Array.from({ length: n }, () => '<div class="skel"></div>').join('')}</div>`;
   const MARK_S = { OFF: 'หยุด', AL: 'พักร้อน', HD: 'นักขัตฯ', SL: 'ลาป่วย', PL: 'ลากิจ' };
   const markOf = (mid, d) => (S.marks || []).find((x) => x.member_id === mid && x.work_date === d);
+  const mkStore = (n) => ({ get: (k) => { try { return window[n].getItem(k); } catch (_) { return null; } }, set: (k, v) => { try { window[n].setItem(k, v); } catch (_) {} }, del: (k) => { try { window[n].removeItem(k); } catch (_) {} } });
+  const LS = mkStore('localStorage'), SS = mkStore('sessionStorage');
   const lastAtt = () => { const o = {}; for (const a of S.att) o[a.member_id] = a; return o; };
   const isToday = (iso) => todayStr(S.tz, new Date(iso)) === today();
   const inNow = (last) => last && last.kind === 'in' && isToday(last.at);
@@ -166,7 +168,7 @@
     try {
       const { data: { session } } = await sb.auth.getSession();
       if (!session || session.user?.user_metadata?.line_sub !== idt.sub) await lineLogin();
-      sessionStorage.removeItem('ps_relogin');
+      SS.del('ps_relogin');
       await loadOrgs();
     } catch (e) { if (e.message !== 'relogin') fatal(errMsg(e)); }
   }
@@ -174,7 +176,7 @@
     const r = await fetch(CFG.SUPABASE_URL + '/functions/v1/line-login', { method: 'POST', headers: { 'Content-Type': 'application/json', apikey: CFG.SUPABASE_ANON_KEY }, body: JSON.stringify({ idToken: liff.getIDToken() }) });
     const j = await r.json().catch(() => ({}));
     if (!r.ok) {
-      if (r.status === 401 && !sessionStorage.getItem('ps_relogin')) { sessionStorage.setItem('ps_relogin', '1'); liff.logout(); liff.login({ redirectUri: location.href }); throw new Error('relogin'); }
+      if (r.status === 401 && !SS.get('ps_relogin')) { SS.set('ps_relogin', '1'); liff.logout(); liff.login({ redirectUri: location.href }); throw new Error('relogin'); }
       throw new Error((j.error || 'เข้าสู่ระบบไม่สำเร็จ') + (r.status === 401 ? ' (ตรวจ LINE_CHANNEL_ID ใน Supabase ว่าตรงกับ Channel ID)' : ''));
     }
     const { error } = await sb.auth.setSession({ access_token: j.session.access_token, refresh_token: j.session.refresh_token });
@@ -183,8 +185,8 @@
   async function loadOrgs(pick) {
     S.orgs = await rpc('my_orgs');
     if (!S.orgs.length) return renderOnboard();
-    if (pick) localStorage.setItem('ps_org', pick);
-    const saved = localStorage.getItem('ps_org');
+    if (pick) LS.set('ps_org', pick);
+    const saved = LS.get('ps_org');
     S.me = S.orgs.find((o) => o.org_id === saved) || S.orgs[0];
     S.isOwner = ['owner', 'manager'].includes(S.me.role);
     S.org = await q(sb.from('orgs').select('*').eq('id', S.me.org_id).single());
@@ -997,7 +999,7 @@
     },
     switchOrg: async (d) => { closeLayer(); loading('กำลังสลับร้าน…'); S.tab = 'home'; await loadOrgs(d.id); },
     newOrgSheet: () => sheet('เปิดร้านใหม่', `<label class="field">ชื่อร้าน<input id="orgName"></label><label class="field">ชื่อที่แสดงของคุณ<input id="ownerName" value="${esc(S.profile.name)}"></label><button class="btn primary block" data-act="createOrg">${ic('plus')}สร้างร้าน</button>`),
-    logout: async () => { await sb.auth.signOut(); localStorage.removeItem('ps_org'); if (liff.isLoggedIn()) liff.logout(); location.reload(); },
+    logout: async () => { await sb.auth.signOut(); LS.del('ps_org'); if (liff.isLoggedIn()) liff.logout(); location.reload(); },
     acceptInvite: async (d, el) => {
       const code = (val('inv') || '').trim(); if (!code) return toast('กรุณาใส่รหัสเชิญ', 'err');
       busyBtn(el, true);
@@ -1212,7 +1214,7 @@
       if (txt !== S.org.name) return toast('พิมพ์ชื่อร้านไม่ตรง', 'err');
       busyBtn(el, true);
       try {
-        if (d.mode === 'org') { await rpc('delete_org', { p_org: S.me.org_id, p_confirm: txt }); closeLayer(); localStorage.removeItem('ps_org'); toast('ลบร้านแล้ว'); S.tab = 'home'; await loadOrgs(); }
+        if (d.mode === 'org') { await rpc('delete_org', { p_org: S.me.org_id, p_confirm: txt }); closeLayer(); LS.del('ps_org'); toast('ลบร้านแล้ว'); S.tab = 'home'; await loadOrgs(); }
         else { await rpc('reset_org_data', { p_org: S.me.org_id, p_confirm: txt }); closeLayer(); toast('ล้างข้อมูลแล้ว'); await refresh(); }
       } catch (e) { busyBtn(el, false); toast(errMsg(e), 'err'); }
     },
