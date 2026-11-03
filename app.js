@@ -43,6 +43,56 @@
   const inNow = (last) => last && last.kind === 'in' && isToday(last.at);
   const forgotOut = (last) => last && last.kind === 'in' && !isToday(last.at) && Date.now() - new Date(last.at).getTime() < 7 * 86400e3;
   const grace = () => S.org?.grace_minutes ?? 15;
+  // ---------- ตรวจตาราง: หาจุดเสี่ยงก่อนใช้งานจริง ----------
+  const RULES = () => ({ cover: true, cover_mgr: true, week_h: 48, streak: 6, avail: true, ...((S.org && S.org.rules) || {}) });
+  const gapsOf = (o, c, iv) => { const g = []; let cur = o; for (const [a, b] of [...iv].sort((x, y) => x[0] - y[0])) { if (a > cur) g.push([cur, Math.min(a, c)]); cur = Math.max(cur, b); if (cur >= c) break; } if (cur < c) g.push([cur, c]); return g.filter(([a, b]) => b > a); };
+  function scheduleIssues(from, to, onlyMember) {
+    const R = RULES(), t = today(), out = [];
+    if (from < t) from = t; if (to < from) return out;
+    const last = [...S.shifts, ...S.open].reduce((mx, s) => (s.work_date > mx ? s.work_date : mx), '');
+    const isRx = (m) => !!m && (m.role === 'pharmacist' || (R.cover_mgr && (m.role === 'owner' || m.role === 'manager')));
+    const nm = (id) => shortName(M(id).display_name);
+    for (let d = from; d <= to; d = addDays(d, 1)) {
+      const ds = S.shifts.filter((s) => s.work_date === d);
+      if (R.cover && !onlyMember && last && d <= last) for (const br of S.branches.filter((b) => b.active)) {
+        const iv = ds.filter((s) => s.branch_id === br.id && isRx(M(s.member_id))).map((s) => [mins(s.start_time), mins(s.end_time)]);
+        const gaps = gapsOf(mins(br.open_time), mins(br.close_time), iv); if (!gaps.length) continue;
+        const ops = S.open.filter((x) => x.work_date === d && x.branch_id === br.id).map((x) => [mins(x.start_time), mins(x.end_time)]);
+        const left = gaps.flatMap(([a, b]) => gapsOf(a, b, ops));
+        const txt = gaps.map(([a, b]) => `${hm(a)}–${hm(b)}`).join(', ');
+        out.push({ sev: left.length ? 'alert' : 'warn', d, b: br.id, k: 'cover', text: `${br.name}: ไม่มีเภสัชกรช่วง ${txt}`, sub: left.length ? 'ร้านขายยาต้องมีเภสัชกรอยู่ตลอดเวลาที่เปิด · เพิ่มเวรหรือประกาศเวรว่าง' : 'ประกาศเวรว่างไว้แล้ว รอคนรับ' });
+      }
+      const byM = {}; ds.forEach((s) => { (byM[s.member_id] = byM[s.member_id] || []).push(s); });
+      for (const [mid, arr] of Object.entries(byM)) {
+        if (onlyMember && mid !== onlyMember) continue;
+        arr.sort((x, y) => mins(x.start_time) - mins(y.start_time));
+        for (let i = 1; i < arr.length; i++) if (mins(arr[i].start_time) < mins(arr[i - 1].end_time)) { out.push({ sev: 'alert', d, m: mid, k: 'dup', text: `${nm(mid)}: มีเวรซ้อนกัน`, sub: `${t5(arr[i - 1].start_time)}–${t5(arr[i - 1].end_time)} กับ ${t5(arr[i].start_time)}–${t5(arr[i].end_time)}` }); break; }
+        const mk = markOf(mid, d); if (mk) out.push({ sev: 'alert', d, m: mid, k: 'mark', text: `${nm(mid)}: มีเวร แต่ลงไว้ว่า${MARK[mk.kind]}`, sub: 'ลบเวรหรือลบวันหยุด/วันลาออกอย่างใดอย่างหนึ่ง' });
+        const m = M(mid);
+        if (R.avail && m.employment === 'parttime' && S.avail.some((a) => a.member_id === mid) && !S.avail.some((a) => a.member_id === mid && a.work_date === d))
+          out.push({ sev: 'warn', d, m: mid, k: 'avail', text: `${nm(mid)}: ไม่ได้แจ้งว่าว่างวันนี้`, sub: 'ถามเจ้าตัวก่อนว่ามาได้ไหม' });
+      }
+    }
+    for (const m of S.members.filter((x) => x.active && (!onlyMember || x.id === onlyMember))) {
+      const hrs = (d) => S.shifts.filter((s) => s.member_id === m.id && s.work_date === d).reduce((a, s) => a + (mins(s.end_time) - mins(s.start_time)) / 60, 0);
+      if (R.week_h) for (let ws = addDays(from, -dow(from)); ws <= to; ws = addDays(ws, 7)) {
+        let h = 0; for (let i = 0; i < 7; i++) h += hrs(addDays(ws, i));
+        if (h > R.week_h) out.push({ sev: 'warn', d: ws < from ? from : ws, m: m.id, k: 'week', text: `${shortName(m.display_name)}: ${Math.round(h * 10) / 10} ชม. ในสัปดาห์ ${dShort(ws)}–${dShort(addDays(ws, 6))}`, sub: `เกินที่ตั้งไว้ ${R.week_h} ชม./สัปดาห์` });
+      }
+      if (R.streak) { let run = 0, told = false; for (let d = addDays(from, -R.streak); d <= to; d = addDays(d, 1)) {
+        if (S.shifts.some((s) => s.member_id === m.id && s.work_date === d)) { run++; if (run > R.streak && !told && d >= from) { told = true; out.push({ sev: 'warn', d, m: m.id, k: 'streak', text: `${shortName(m.display_name)}: ทำงานติดกันเกิน ${R.streak} วัน`, sub: 'ควรมีวันหยุดอย่างน้อยสัปดาห์ละ 1 วัน' }); } }
+        else { run = 0; told = false; } } }
+    }
+    return out.sort((x, y) => (x.d < y.d ? -1 : x.d > y.d ? 1 : (x.sev === 'alert' ? -1 : 1)));
+  }
+  const issueRow = (x, showDay = true) => `<button class="iss-row ${x.sev}" data-act="goIssue" data-d="${x.d}"><span class="dotc"></span><span class="grow"><b>${esc(x.text)}</b><br><span class="tiny muted">${showDay ? dShort(x.d) + ' · ' : ''}${esc(x.sub || '')}</span></span>${showDay ? ic('chevron-right') : ''}</button>`;
+  function issueCard() {
+    if (!S.branches.length || !S.shifts.length) return '';
+    const t = today(), list = scheduleIssues(t, addDays(t, 13)), al = list.filter((x) => x.sev === 'alert').length;
+    if (!list.length) return `<div class="card iss-ok"><div class="row"><span class="icon-chip t-teal">${ic('shield-check')}</span><div class="grow"><b>ตาราง 14 วันข้างหน้าเรียบร้อย</b><br><span class="small muted">มีเภสัชกรครบทุกช่วงที่เปิด ไม่มีเวรชน ไม่มีใครทำงานเกิน</span></div></div></div>`;
+    return `<div class="card"><div class="card-head"><div class="row"><span class="icon-chip ${al ? 't-coral' : 't-sun'}">${ic('shield-alert')}</span><div><h2>ตรวจตาราง</h2><span class="tiny muted">14 วันข้างหน้า</span></div></div><div class="row">${al ? `<span class="pill alert">ต้องแก้ ${al}</span>` : ''}${list.length - al ? `<span class="pill warn">ควรดู ${list.length - al}</span>` : ''}</div></div>
+      <div class="stack" style="gap:6px">${list.slice(0, 4).map((x) => issueRow(x)).join('')}</div>${list.length > 4 ? `<button class="btn ghost" data-act="issuesAll">ดูทั้งหมด ${list.length} รายการ</button>` : ''}</div>`;
+  }
   const fmtDist = (m) => (m < 1000 ? `${m} ม.` : `${(m / 1000).toFixed(1)} กม.`);
   function geoFlag(a) {
     if (!a || !isToday(a.at)) return '';
@@ -285,7 +335,7 @@
         <button class="card" data-act="tab" data-tab="cal" style="flex-direction:row;align-items:center;border:0;text-align:left;cursor:pointer"><span class="icon-chip t-coral">${ic('calendar-x')}</span><span><b style="font:500 24px var(--display)">${fo}</b><br><span class="small muted">เวรว่างที่ยังไม่มีคนรับ</span></span></button>
         <button class="card" data-act="tab" data-tab="req" style="flex-direction:row;align-items:center;border:0;text-align:left;cursor:pointer"><span class="icon-chip t-sun">${ic('bell-ring')}</span><span><b style="font:500 24px var(--display)">${pend}</b><br><span class="small muted">คำขอรออนุมัติ</span></span></button>
         <button class="card" data-act="tab" data-tab="set" style="flex-direction:row;align-items:center;border:0;text-align:left;cursor:pointer"><span class="icon-chip t-lilac">${ic('users')}</span><span><b style="font:500 24px var(--display)">${S.members.filter((m) => m.active).length}</b><br><span class="small muted">คนในร้าน</span></span></button>
-      </div>` + setupCard() + friendBanner() + swapCards();
+      </div>` + setupCard() + issueCard() + friendBanner() + swapCards();
     if (!S.branches.length) return h + `<div class="card" style="align-items:flex-start"><span class="icon-chip t-brand">${ic('map-pin')}</span><h2>เริ่มจากเพิ่มสาขาแรก</h2><p class="muted">ใส่ชื่อสาขาและเวลาเปิด–ปิด แล้วเพิ่มพนักงาน</p><button class="btn primary" data-act="tab" data-tab="set">${ic('settings')}ไปที่ตั้งค่าร้าน</button></div>`;
     h += `<div class="card"><div class="card-head"><div class="row"><span class="icon-chip t-brand">${ic('store')}</span><h2>ตอนนี้ที่ร้าน</h2></div><button class="btn ghost" data-act="refresh">${ic('rotate-cw')}รีเฟรช</button></div><div class="grid">`;
     for (const br of opens) {
@@ -347,9 +397,11 @@
     const people = S.members.filter((m) => m.active && (m.role !== 'owner' || S.shifts.some((x) => x.member_id === m.id))).sort((x, y) => (order[x.employment] ?? 1) - (order[y.employment] ?? 1));
     const brs = S.branches.filter((x) => x.active);
     const bl = brushList(), cur = S.brush;
+    const ISS = scheduleIssues(days[0], days[days.length - 1]), issD = new Set(ISS.filter((x) => x.sev === 'alert').map((x) => x.d)), issC = new Set(ISS.filter((x) => x.m).map((x) => x.m + x.d));
     let h = `<div class="card"><div class="card-head">${nw ? `<div class="row"><button class="btn ghost" data-act="week" data-n="-7" aria-label="สัปดาห์ก่อน">${ic('chevron-left')}</button><b>${dShort(ws)} – ${dShort(addDays(ws, 6))}</b><button class="btn ghost" data-act="week" data-n="7" aria-label="สัปดาห์ถัดไป">${ic('chevron-right')}</button></div>` : monthNav()}<span class="small muted">${cur ? 'โหมดลงเร็ว: แตะช่องไหนก็ลงทันที' : 'แตะช่องเพื่อเลือกเวร · หรือเลือกแบบด้านล่างแล้วแตะหลายช่องต่อกัน'}</span></div>
       <div class="brushes"><span class="tiny muted">ลงเร็ว:</span>${bl.map((x) => `<button data-act="brush" data-k="${x.k}" aria-pressed="${cur === x.k}" title="${esc(x.sub)}">${esc(x.label)}</button>`).join('')}${cur ? `<button data-act="brush" data-k="" style="border-color:var(--coral)">${ic('x')}เลิกลงเร็ว</button>` : ''}</div>
-      <div class="gridwrap" id="gw"><table class="sheetg"><thead><tr><th class="nm">ชื่อ</th>${days.map((d) => `<th class="${dow(d) === 0 || dow(d) === 6 ? 'we' : ''} ${d === t ? 'td' : ''}">${Number(d.slice(8))}<br><span class="tiny">${DOW[dow(d)].replace('.', '')}</span></th>`).join('')}${brs.length > 1 ? brs.map((x) => `<th title="${esc(x.name)}">${esc(shortB(x.id))}</th>`).join('') : '<th>เวร</th>'}<th>ชม.</th><th>หยุด</th><th>ลา</th></tr></thead><tbody>`;
+      ${ISS.length ? `<button class="iss-bar ${issD.size ? 'alert' : 'warn'}" data-act="issuesAll" data-a="${days[0]}" data-b="${days[days.length - 1]}">${ic('shield-alert')}<span class="grow">พบ ${ISS.length} จุดที่ควรตรวจในช่วงนี้${issD.size ? ` · วันที่มีจุดแดงต้องแก้` : ''}</span>${ic('chevron-right')}</button>` : (S.shifts.length ? `<div class="iss-bar ok">${ic('shield-check')}<span>ตารางช่วงนี้เรียบร้อย</span></div>` : '')}
+      <div class="gridwrap" id="gw"><table class="sheetg"><thead><tr><th class="nm">ชื่อ</th>${days.map((d) => `<th class="${dow(d) === 0 || dow(d) === 6 ? 'we' : ''} ${d === t ? 'td' : ''} ${issD.has(d) ? 'issd' : ''}">${Number(d.slice(8))}<br><span class="tiny">${DOW[dow(d)].replace('.', '')}</span></th>`).join('')}${brs.length > 1 ? brs.map((x) => `<th title="${esc(x.name)}">${esc(shortB(x.id))}</th>`).join('') : '<th>เวร</th>'}<th>ชม.</th><th>หยุด</th><th>ลา</th></tr></thead><tbody>`;
     for (const m of people) {
       let row = `<tr><td class="nm" title="${esc(m.display_name)}">${esc(m.display_name)}<small>${esc(EMP[m.employment] || '')}</small></td>`, cnt = {}, hrs = 0, off = 0, lv = 0;
       for (const d of days) {
@@ -360,7 +412,7 @@
         if (ss.length) { lab = ss.map((x) => `<b>${esc(shiftName(x))}</b>${multiB() ? `<span>${esc(shortB(x.branch_id))}</span>` : ''}`).join(''); cls = 'b' + bIdx(ss[0].branch_id); ss.forEach((s) => { cnt[s.branch_id] = (cnt[s.branch_id] || 0) + 1; hrs += (mins(s.end_time) - mins(s.start_time)) / 60; }); }
         else if (mk) { lab = `<b>${MARK_S[mk.kind]}</b>${Number(mk.days) === 0.5 ? '<span>ครึ่งวัน</span>' : ''}`; cls = 'k-' + mk.kind; if (mk.kind === 'OFF') off++; else lv += Number(mk.days); }
         else if (rq) lab = '?';
-        row += `<td><button class="gc ${cls} ${lvq ? 'lv' : ''} ${rq ? 'rq' : ''}" data-act="gridCell" data-m="${m.id}" data-d="${d}" aria-label="${esc(m.display_name)} ${dShort(d)}">${lab}</button></td>`;
+        row += `<td><button class="gc ${cls} ${lvq ? 'lv' : ''} ${rq ? 'rq' : ''} ${issC.has(m.id + d) ? 'iss' : ''}" data-act="gridCell" data-m="${m.id}" data-d="${d}" aria-label="${esc(m.display_name)} ${dShort(d)}">${lab}</button></td>`;
       }
       row += (brs.length > 1 ? brs.map((x) => `<td class="sum">${cnt[x.id] || ''}</td>`).join('') : `<td class="sum">${Object.values(cnt).reduce((a2, v) => a2 + v, 0) || ''}</td>`) + `<td class="sum">${hrs ? Math.round(hrs) : ''}</td><td class="sum">${off || ''}</td><td class="sum">${lv || ''}</td></tr>`;
       h += row;
@@ -389,11 +441,14 @@
     } catch (e) { toast(errMsg(e), 'err'); await refresh(); return; }
     const gw = document.getElementById('gw'), sx = gw ? gw.scrollLeft : 0, sy = gw ? gw.scrollTop : 0, wy = window.scrollY;
     render(); const g2 = document.getElementById('gw'); if (g2) { g2.scrollLeft = sx; g2.scrollTop = sy; } window.scrollTo(0, wy);
+    const nw2 = scheduleIssues(d, d).filter((x) => x.m === mid || x.k === 'cover').concat(scheduleIssues(addDays(d, -6), addDays(d, 6), mid).filter((x) => x.k === 'week' || x.k === 'streak'));
+    if (nw2.length) toast('⚠ ' + nw2[0].text, nw2[0].sev === 'alert' ? 'err' : undefined);
   }
   function ownerCal() {
     if (S.calView === 'list') return viewSeg() + `<div class="card">${agenda(true)}</div>`;
     if (S.calView === 'grid') return viewSeg() + gridView();
     const [a, b] = monthRange(S.month), t = today(), fb = S.filter, all = fb === '0';
+    const issM = scheduleIssues(a, b), issA = new Set(issM.filter((x) => x.sev === 'alert').map((x) => x.d)), issW = new Set(issM.map((x) => x.d));
     let g = DOW.map((x, i) => `<div class="dow ${i === 0 || i === 6 ? 'we' : ''}">${x.replace('.', '')}</div>`).join('');
     for (let i = 0; i < dow(a); i++) g += `<div class="cell blank"></div>`;
     for (let d = a; d <= b; d = addDays(d, 1)) {
@@ -406,7 +461,7 @@
         }
         for (const o of S.open.filter((x) => x.work_date === d && x.branch_id === br.id)) c += `<span class="chip open"><span class="txt">${all && S.branches.length > 1 ? esc(shortB(br.id)) + ' ' : ''}ว่าง</span><span class="ini">!</span></span>`;
       }
-      g += `<button class="cell ${d < t ? 'past' : ''} ${d === t ? 'today' : ''} ${d === S.sel ? 'sel' : ''}" data-act="pick" data-d="${d}" aria-label="${dLong(d)}"><span class="dnum">${Number(d.slice(8))}</span>${c}</button>`;
+      g += `<button class="cell ${d < t ? 'past' : ''} ${d === t ? 'today' : ''} ${d === S.sel ? 'sel' : ''}" data-act="pick" data-d="${d}" aria-label="${dLong(d)}"><span class="dnum">${Number(d.slice(8))}${issW.has(d) ? `<i class="idot ${issA.has(d) ? 'alert' : 'warn'}"></i>` : ''}</span>${c}</button>`;
     }
     const legend = S.members.filter((m) => m.active && m.role !== 'owner').map((m) => `<span><i style="background:var(--${tone(m.color)})"></i>${esc(shortName(m.display_name))}</span>`).join('') + `<span><i style="background:var(--coral-soft);outline:1.5px dashed var(--coral)"></i>เวรว่าง</span><span><i style="background:var(--warn-soft)"></i>ขอลา</span>`;
     return viewSeg() + `<div class="calgrid">
@@ -419,6 +474,7 @@
     const d = S.sel, t = today();
     let h = `<div class="card-head"><div><h2>${dShort(d)}</h2><span class="tiny muted">${dLong(d)}</span></div>${d >= t ? `<button class="btn primary" data-act="addShift">${ic('plus')}เพิ่มเวร</button>` : ''}</div>`;
     if (!S.branches.length) return h + `<p class="muted small">ยังไม่มีสาขา</p>`;
+    { const di = scheduleIssues(d, d); if (di.length) h += `<div class="stack" style="gap:6px">${di.map((x) => issueRow(x, false)).join('')}</div>`; }
     const avl = new Set(S.avail.filter((x) => x.work_date === d).map((x) => x.member_id));
     for (const br of S.branches.filter((x) => x.active)) {
       const ss = S.shifts.filter((x) => x.work_date === d && x.branch_id === br.id), os = S.open.filter((x) => x.work_date === d && x.branch_id === br.id);
@@ -588,10 +644,11 @@
       ['branch', 'map-pin', 't-sky', 'สาขาและจอ QR', br.length ? `${br.length} สาขา · ตั้งตำแหน่งแล้ว ${br.filter((x) => x.lat != null).length}/${br.length}` : 'ยังไม่มีสาขา'],
       ['staff', 'users', 't-lilac', 'พนักงาน', `${staff} คน${pend ? ` · รอเข้าร่วม ${pend}` : ''}`],
       ['preset', 'clock', 't-teal', 'เวรสำเร็จรูป', presets().map((p) => esc(p.code)).join(' · ')],
+      ['rules', 'shield-check', 't-coral', 'กฎตรวจตาราง', (() => { const R = RULES(); return [R.cover ? 'เภสัชกรครบทุกช่วง' : '', R.week_h ? `ไม่เกิน ${R.week_h} ชม./สัปดาห์` : '', R.streak ? `ติดกันไม่เกิน ${R.streak} วัน` : ''].filter(Boolean).join(' · ') || 'ปิดอยู่'; })()],
       ['notify', 'bell-ring', 't-sun', 'แจ้งเตือนทาง LINE', Object.values(S.org.notify || {}).filter((v) => v === false).length ? 'ปิดบางรายการ' : 'เปิดทั้งหมด'],
     ];
     if (S.me.role === 'owner') items.push(['reset', 'trash-2', 't-coral', 'ล้างข้อมูล / ลบร้าน', 'ใช้หลังสาธิต หรือก่อนเริ่มใช้งานจริง']);
-    return `<h1>ตั้งค่า</h1>${setupCard(true)}<div class="card" style="padding:6px 14px">${items.map(([k, i, t, n, d]) => `<button class="setrow" data-act="setSec" data-v="${k}"><span class="icon-chip ${t}">${ic(i)}</span><span class="grow"><b>${n}</b><br><span class="small muted">${d}</span></span>${ic('chevron-right')}</button>`).join('')}</div><p class="tiny muted" style="text-align:center">เวอร์ชัน 3 พ.ย. 69 UX (เช็กลิสต์ตั้งร้าน · ตั้งค่าแยกหมวด · มือถือ)</p>`;
+    return `<h1>ตั้งค่า</h1>${setupCard(true)}<div class="card" style="padding:6px 14px">${items.map(([k, i, t, n, d]) => `<button class="setrow" data-act="setSec" data-v="${k}"><span class="icon-chip ${t}">${ic(i)}</span><span class="grow"><b>${n}</b><br><span class="small muted">${d}</span></span>${ic('chevron-right')}</button>`).join('')}</div><p class="tiny muted" style="text-align:center">เวอร์ชัน 3 พ.ย. 69 ตรวจตาราง (เภสัชกรครบ · เวรชน · ชั่วโมงเกิน)</p>`;
   }
   function ownerSetAll() {
     const liffUrl = `https://liff.line.me/${CFG.LIFF_ID}`, kioskUrl = new URL('kiosk.html', location.href).href;
@@ -608,7 +665,7 @@
         <label class="row small"><input type="checkbox" id="oGps" ${S.org.require_gps ? 'checked' : ''}> บังคับเปิดตำแหน่ง (GPS) ทุกครั้งที่สแกน (ไม่เปิด = สแกนไม่ได้)</label>
         <button class="btn primary" data-act="saveOrg">${ic('check')}บันทึก</button>
         <div class="stack small" style="border-top:1px solid var(--line);padding-top:12px"><b>ลิงก์แอปสำหรับพนักงาน</b><div class="row"><span class="code" style="font-size:12px;letter-spacing:0;overflow:hidden;text-overflow:ellipsis">${esc(liffUrl)}</span><button class="btn ghost" data-act="copy" data-text="${esc(liffUrl)}">${ic('copy')}</button></div>
-        <b>ลิงก์จอที่ร้าน (เปิดบนโทรศัพท์ร้าน)</b><div class="row"><span class="code" style="font-size:12px;letter-spacing:0;overflow:hidden;text-overflow:ellipsis">${esc(kioskUrl)}</span><button class="btn ghost" data-act="copy" data-text="${esc(kioskUrl)}">${ic('copy')}</button></div><span class="muted" style="font-size:12px">เวอร์ชัน 3 พ.ย. 69 UX (เช็กลิสต์ตั้งร้าน · ตั้งค่าแยกหมวด · มือถือ)</span></div></div>
+        <b>ลิงก์จอที่ร้าน (เปิดบนโทรศัพท์ร้าน)</b><div class="row"><span class="code" style="font-size:12px;letter-spacing:0;overflow:hidden;text-overflow:ellipsis">${esc(kioskUrl)}</span><button class="btn ghost" data-act="copy" data-text="${esc(kioskUrl)}">${ic('copy')}</button></div><span class="muted" style="font-size:12px">เวอร์ชัน 3 พ.ย. 69 ตรวจตาราง (เภสัชกรครบ · เวรชน · ชั่วโมงเกิน)</span></div></div>
       <div class="card" data-sec="branch"><div class="card-head"><div class="row"><span class="icon-chip t-sky">${ic('map-pin')}</span><h2>สาขา</h2></div><button class="btn" data-act="editBranch">${ic('plus')}เพิ่มสาขา</button></div>`;
     if (!S.branches.length) h += `<p class="small muted">ยังไม่มีสาขา กด "เพิ่มสาขา" เพื่อเริ่ม</p>`;
     for (const br of S.branches) h += `<div class="list-row" style="flex-wrap:wrap"><div class="grow"><b>${esc(br.name)}</b>${br.active ? '' : ' <span class="pill wait">ปิดใช้งาน</span>'}<br><span class="small muted">${t5(br.open_time)}–${t5(br.close_time)}${br.lat != null ? ' · ตั้งตำแหน่งแล้ว' : ' · ยังไม่ตั้งตำแหน่ง'}</span></div><button class="btn ghost" data-act="pairKiosk" data-id="${br.id}">${ic('monitor-smartphone')}จับคู่จอ QR</button>${br.allow_static ? `<a class="btn ghost" href="print.html?b=${br.id}" target="_blank" rel="noopener">${ic('printer')}ปริ้น QR ติดผนัง</a>` : ''}<button class="btn ghost" data-act="editBranch" data-id="${br.id}" aria-label="แก้ไขสาขา">${ic('pencil')}</button></div>`;
@@ -621,6 +678,14 @@
     }
     h += `</div>`;
     const N = S.org.notify || {}, nk = [['requests', 'แจ้งเจ้าของเมื่อมีคำขอใหม่ (ลา รับเวร แก้เวลา แลกเวร)'], ['decisions', 'แจ้งพนักงานเมื่ออนุมัติ / ไม่อนุมัติ'], ['remind', 'เตือนพนักงานก่อนเข้าเวร 1 ชั่วโมง'], ['forgot', 'เตือนคนลืมกดออกงาน'], ['open', 'ประกาศเวรว่างให้ พาร์ทไทม์']];
+    { const R = RULES(); h += `<div class="card" data-sec="rules"><div class="row"><span class="icon-chip t-coral">${ic('shield-check')}</span><h2>กฎตรวจตาราง</h2></div><span class="small muted">แอปจะเตือนในหน้าภาพรวมและในตารางทันทีเมื่อจัดเวรผิดกฎเหล่านี้</span>
+      <label class="row small"><input type="checkbox" id="rCover" ${R.cover ? 'checked' : ''}> ต้องมีเภสัชกรอยู่ทุกช่วงที่สาขาเปิด</label>
+      <label class="row small" style="padding-left:24px"><input type="checkbox" id="rMgr" ${R.cover_mgr ? 'checked' : ''}> นับเจ้าของร้านและผู้จัดการเป็นเภสัชกรด้วย</label>
+      <label class="field">ชั่วโมงทำงานสูงสุดต่อสัปดาห์<select id="rWeek">${[0, 40, 44, 48, 54, 60].map((n) => `<option value="${n}" ${R.week_h === n ? 'selected' : ''}>${n ? n + ' ชม.' : 'ไม่ตรวจ'}</option>`).join('')}</select></label>
+      <label class="field">ทำงานติดกันได้ไม่เกิน<select id="rStreak">${[0, 5, 6, 7, 10].map((n) => `<option value="${n}" ${R.streak === n ? 'selected' : ''}>${n ? n + ' วัน' : 'ไม่ตรวจ'}</option>`).join('')}</select></label>
+      <label class="row small"><input type="checkbox" id="rAvail" ${R.avail ? 'checked' : ''}> เตือนเมื่อลงเวรพาร์ทไทม์ในวันที่เขาไม่ได้แจ้งว่าว่าง</label>
+      ${help('กฎหมายแรงงานกำหนดชั่วโมงทำงานไม่เกิน 48 ชม./สัปดาห์ และให้มีวันหยุดอย่างน้อยสัปดาห์ละ 1 วัน · ร้านขายยาต้องมีเภสัชกรประจำตลอดเวลาที่เปิด · การเตือนไม่ได้ห้ามลงเวร แค่ช่วยให้เห็นจุดที่ควรแก้')}
+      <button class="btn primary" data-act="saveRules">${ic('check')}บันทึก</button></div>`; }
     h += `<div class="card" data-sec="preset"><div class="row"><span class="icon-chip t-teal">${ic('clock')}</span><h2>เวรสำเร็จรูป</h2></div><span class="small muted">ชื่อเวรที่ใช้บ่อย เช่น เต็มวัน ช่วงเช้า ช่วงบ่าย</span>
       <div id="presetRows">${presets().map((p, i) => `<div class="row" style="gap:6px"><input class="pc" value="${esc(p.code)}" maxlength="12" style="width:110px" aria-label="ชื่อเวร"><input class="ps" type="time" value="${p.start}" aria-label="เริ่ม"><input class="pe" type="time" value="${p.end}" aria-label="ถึง"><button class="btn ghost" data-act="delPreset" data-i="${i}" aria-label="ลบ">${ic('trash-2')}</button></div>`).join('')}</div>
       <div class="row"><button class="btn" data-act="addPreset">${ic('plus')}เพิ่มเวร</button><button class="btn primary" data-act="savePresets">${ic('check')}บันทึก</button></div></div>`;
@@ -835,6 +900,10 @@
     bgClose: (d, el, e) => { if (e.target === el) closeLayer(); },
     refresh: () => refresh(),
     month: async (d) => { S.month = shiftMonth(S.month, Number(d.n)); const [a] = monthRange(S.month); S.sel = S.month === today().slice(0, 7) ? today() : a; await refresh(); },
+    goIssue: (d) => { closeLayer(); S.tab = 'cal'; S.sel = d.d; if (S.calView === 'list') S.calView = 'month'; const m = d.d.slice(0, 7); if (m !== S.month) { S.month = m; refresh().then(() => document.getElementById('day')?.scrollIntoView({ behavior: 'smooth' })); } else { render(); window.scrollTo(0, 0); if (S.calView !== 'grid') document.getElementById('day')?.scrollIntoView({ behavior: 'smooth' }); } },
+    issuesAll: (d) => { const t = today(), a = d.a || t, b = d.b || addDays(t, 13), list = scheduleIssues(a, b); sheet(`ตรวจตาราง · ${dShort(a < t ? t : a)}–${dShort(b)}`, list.length ? `<div class="stack" style="gap:6px">${list.map((x) => issueRow(x)).join('')}</div>` : '<p class="muted">ไม่พบจุดที่ต้องแก้</p>'); },
+    saveRules: async (d, el) => { busyBtn(el, true); const rules = { cover: document.getElementById('rCover').checked, cover_mgr: document.getElementById('rMgr').checked, week_h: Number(val('rWeek')), streak: Number(val('rStreak')), avail: document.getElementById('rAvail').checked };
+      try { await q(sb.from('orgs').update({ rules }).eq('id', S.me.org_id)); S.org.rules = rules; toast('บันทึกแล้ว'); render(); } catch (e) { busyBtn(el, false); toast(/rules/.test(errMsg(e)) ? 'ต้องรัน SQL อัปเดต 010 ก่อน' : errMsg(e), 'err'); } },
     pick: (d) => { S.sel = d.d; render(); if (S.isOwner && innerWidth < 900) document.getElementById('day')?.scrollIntoView({ behavior: 'smooth' }); },
     setSec: (d) => { S.setSec = d.v || null; render(); window.scrollTo(0, 0); },
     dismissSetup: () => { try { localStorage.setItem('ps_setup_hide_' + S.me.org_id, '1'); } catch (_) {} render(); },
