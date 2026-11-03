@@ -47,6 +47,8 @@
     });
   }
 
+  const lateKind = (lm) => lm == null ? null : lm <= 0 ? 'ok' : lm <= grace() ? 'warn' : 'alert';
+  const LATE_TH = { ok: 'ตรงเวลา', warn: 'สายในเกณฑ์', alert: 'สายเกินเกณฑ์' };
   function gpsHelp() {
     sheet('เปิดตำแหน่ง (GPS) ให้ LINE', `<p class="small">${S.gpsErr === 'denied' ? 'เครื่องนี้ปิดสิทธิ์ตำแหน่งของ LINE ไว้ หน้าต่างขออนุญาตจึงไม่ขึ้น' : 'ยังอ่านตำแหน่งของเครื่องไม่ได้'} ทำตามนี้ครั้งเดียว:</p>
       <b class="small">iPhone</b><ol class="small" style="margin:0;padding-left:20px"><li>ตั้งค่า → ความเป็นส่วนตัวและความปลอดภัย → บริการหาตำแหน่ง → <b>เปิด</b></li><li>เลื่อนหา <b>LINE</b> → เลือก <b>ขณะใช้แอป</b> และเปิด <b>ตำแหน่งที่แม่นยำ</b></li></ol>
@@ -58,8 +60,9 @@
     const st = mins(s.start_time), g = grace(), N = nowMins(S.tz);
     if (last && isToday(last.at)) {
       if (last.kind === 'out') return { c: 'ok', i: 'log-out', t: `ออกงาน ${fmtTime(last.at, S.tz)}` };
-      const late = mins(fmtTime(last.at, S.tz)) - st - g;
-      return late > 0 ? { c: 'warn', i: 'clock', t: `เข้างาน ${fmtTime(last.at, S.tz)} · สาย ${late} นาที` } : { c: 'ok', i: 'check', t: `เข้างาน ${fmtTime(last.at, S.tz)}` };
+      const late = mins(fmtTime(last.at, S.tz)) - st;
+      if (late <= 0) return { c: 'ok', i: 'check', t: `เข้างาน ${fmtTime(last.at, S.tz)} · ตรงเวลา` };
+      return late <= g ? { c: 'warn', i: 'clock', t: `เข้างาน ${fmtTime(last.at, S.tz)} · สาย ${late} นาที (ในเกณฑ์)` } : { c: 'alert', i: 'clock-alert', t: `เข้างาน ${fmtTime(last.at, S.tz)} · สาย ${late} นาที (เกินเกณฑ์)` };
     }
     if (M(s.member_id)?.clock_free) return { c: 'ok', i: 'user-check', t: 'ไม่ต้องลงเวลา' };
     if (s.work_date > today() || N < st) return { c: 'wait', i: 'clock', t: `เริ่ม ${t5(s.start_time)}` };
@@ -148,7 +151,7 @@
       sb.rpc('pending_ot', { p_org: o }),
     ] : [
       Promise.resolve({ data: [] }), Promise.resolve({ data: [] }),
-      sb.from('shift_claims').select('*').eq('member_id', S.me.member_id).order('created_at', { ascending: false }),
+      sb.from('shift_claims').select('*, open_shifts(*)').eq('member_id', S.me.member_id).order('created_at', { ascending: false }),
       sb.from('leave_requests').select('*').eq('member_id', S.me.member_id).order('created_at', { ascending: false }),
       sb.from('attendance_fixes').select('*').eq('member_id', S.me.member_id).order('created_at', { ascending: false }).limit(10),
       Promise.resolve({ data: [] }),
@@ -162,13 +165,21 @@
     S.handover = res[7];
     S.att = res[8]; S.invites = Object.fromEntries(res[9].map((i) => [i.member_id, i.code]));
     S.claims = res[10]; S.leaves = res[11]; S.fixes = res[12]; S.ot = res[13] || [];
-    try { S.swaps = await q(sb.from('shift_swaps').select('*').eq('org_id', o).in('status', ['pending_peer', 'pending_owner']).order('created_at')); } catch (_) { S.swaps = []; }
+    try { S.swaps = await q(sb.from('shift_swaps').select('*').eq('org_id', o).gte('created_at', new Date(Date.now() - 45 * 86400e3).toISOString()).order('created_at', { ascending: false })); } catch (_) { S.swaps = []; }
+    try { const ws = addDays(t, -dow(t)); S.myAtt = await q(sb.from('attendance').select('kind,at,branch_id').eq('member_id', S.me.member_id).gte('at', new Date(new Date(ws + 'T00:00:00+07:00').getTime() - 864e5).toISOString()).order('at')); } catch (_) { S.myAtt = []; }
     if (S.app == null) { try { S.app = await rpc('app_public'); } catch (_) { S.app = {}; } }
   }
+  const PEND = (w) => w.status === 'pending_peer' || w.status === 'pending_owner';
   const ownerSwaps = () => (S.swaps || []).filter((w) => w.status === 'pending_owner');
   const swapLine = (w) => { const a = S.shifts.find((x) => x.id === w.shift_id), b = S.shifts.find((x) => x.id === w.to_shift_id), fm = M(w.from_member), tm = M(w.to_member);
     const sh = (x) => x ? `${dShort(x.work_date)} ${t5(x.start_time)}–${t5(x.end_time)} · ${esc(B(x.branch_id).name)}` : 'เวร';
     return `<span class="small">${esc(fm.display_name)}: ${sh(a)}</span><br><span class="small">${w.to_shift_id ? `⇄ ${esc(tm.display_name)}: ${sh(b)}` : `→ ยกให้ ${esc(tm.display_name)}`}</span>${w.note ? `<br><span class="small muted">หมายเหตุ: ${esc(w.note)}</span>` : ''}`; };
+  function swapCards() {
+    let h = '';
+    for (const w of (S.swaps || []).filter((x) => x.status === 'pending_peer' && x.to_member === S.me.member_id)) h += `<div class="card" style="border:1.5px solid var(--brand)"><div class="row"><span class="icon-chip t-lilac">${ic('repeat')}</span><div class="grow"><b>${esc(M(w.from_member).display_name)} ขอ${w.to_shift_id ? 'แลก' : 'ยก'}เวรให้คุณ</b><br>${swapLine(w)}</div></div><div class="row"><button class="btn primary" data-act="respondSwap" data-id="${w.id}" data-ok="1">${ic('check')}ตกลง</button><button class="btn" data-act="respondSwap" data-id="${w.id}" data-ok="0">ไม่สะดวก</button></div><span class="tiny muted">ตกลงแล้วต้องรอเจ้าของร้านอนุมัติอีกครั้ง</span></div>`;
+    for (const w of (S.swaps || []).filter((x) => x.from_member === S.me.member_id && PEND(x))) h += `<div class="card" style="flex-direction:row;align-items:center"><span class="icon-chip t-lilac">${ic('repeat')}</span><span class="grow small"><b>${w.status === 'pending_peer' ? `รอ ${esc(M(w.to_member).display_name)} ตอบ` : 'รอเจ้าของร้านอนุมัติ'}</b><br>${swapLine(w)}</span><button class="btn ghost" data-act="cancelSwap" data-id="${w.id}">ยกเลิก</button></div>`;
+    return h;
+  }
   function friendBanner() {
     const id = (S.app && S.app.line_oa_id) || ''; if (!id || S.isFriend !== false) return '';
     return `<a class="card" href="https://line.me/R/ti/p/${encodeURIComponent(id)}" target="_blank" rel="noopener" style="flex-direction:row;align-items:center;text-decoration:none;color:inherit;border:1.5px solid var(--brand)"><span class="icon-chip t-brand">${ic('bell-ring')}</span><span class="grow small"><b>เพิ่มเพื่อน PharmaShift ใน LINE</b><br>เพื่อรับแจ้งเตือนเวร คำขอ และสลิปค่าจ้าง</span>${ic('chevron-right')}</a>`;
@@ -181,7 +192,7 @@
       const pend = S.claims.length + S.leaves.length + S.fixes.length + S.ot.length + ownerSwaps().length;
       return [['home', 'layout-dashboard', 'ภาพรวม'], ['cal', 'calendar-days', 'ปฏิทิน'], ['req', 'bell', 'คำขอ', pend], ['pay', 'wallet', 'ค่าจ้าง'], ['set', 'settings', 'ตั้งค่า']];
     }
-    const me = M(S.me.member_id), t = [['home', 'house', 'หน้าแรก'], ['cal', 'calendar-days', 'ปฏิทิน']];
+    const me = M(S.me.member_id), t = [['home', 'house', 'หน้าแรก'], ['cal', 'calendar-days', 'ปฏิทิน'], ['req', 'inbox', 'คำขอ', (S.swaps || []).filter((w) => w.status === 'pending_peer' && w.to_member === S.me.member_id).length]];
     if (isPharm(me)) t.push(['open', 'megaphone', 'เวรว่าง', openForMe().filter((o) => !myClaim(o.id)).length]);
     if (me.employment === 'parttime') t.push(['money', 'wallet', 'รายได้']);
     return t;
@@ -192,7 +203,7 @@
     $top.hidden = false; $nav.hidden = false;
     $top.innerHTML = `<svg class="logo"><use href="#logo"/></svg><div class="name"><b>${esc(S.me.org_name)}</b><span>${esc(S.me.display_name)} · ${esc(ROLE[S.me.role] || '')}</span></div><button class="btn ghost" data-act="menu" aria-label="เมนูบัญชี" style="padding:4px;border-radius:50%">${avatar(S.me.display_name, M(S.me.member_id).color, 'sm', S.profile.picture)}</button>`;
     $nav.innerHTML = `<div class="in">${tabs.map((t) => `<button data-act="tab" data-tab="${t[0]}" aria-current="${S.tab === t[0]}">${ic(t[1])}${t[2]}${t[3] ? `<span class="badge">${t[3]}</span>` : ''}</button>`).join('')}</div>`;
-    const views = S.isOwner ? { home: ownerHome, cal: ownerCal, req: ownerReq, pay: ownerPay, set: ownerSet } : { home: staffHome, cal: staffCal, open: staffOpen, money: staffMoney };
+    const views = S.isOwner ? { home: ownerHome, cal: ownerCal, req: ownerReq, pay: ownerPay, set: ownerSet } : { home: staffHome, cal: staffCal, req: staffReq, open: staffOpen, money: staffMoney };
     $main.className = 'main' + (S.isOwner && ['cal', 'set', 'pay', 'home'].includes(S.tab) ? '' : ' narrow');
     $main.innerHTML = views[S.tab]();
     icons();
@@ -227,7 +238,7 @@
         <button class="card" data-act="tab" data-tab="cal" style="flex-direction:row;align-items:center;border:0;text-align:left;cursor:pointer"><span class="icon-chip t-coral">${ic('calendar-x')}</span><span><b style="font:500 24px var(--display)">${fo}</b><br><span class="small muted">เวรว่างที่ยังไม่มีคนรับ</span></span></button>
         <button class="card" data-act="tab" data-tab="req" style="flex-direction:row;align-items:center;border:0;text-align:left;cursor:pointer"><span class="icon-chip t-sun">${ic('bell-ring')}</span><span><b style="font:500 24px var(--display)">${pend}</b><br><span class="small muted">คำขอรออนุมัติ</span></span></button>
         <button class="card" data-act="tab" data-tab="set" style="flex-direction:row;align-items:center;border:0;text-align:left;cursor:pointer"><span class="icon-chip t-lilac">${ic('users')}</span><span><b style="font:500 24px var(--display)">${S.members.filter((m) => m.active).length}</b><br><span class="small muted">คนในร้าน</span></span></button>
-      </div>` + friendBanner();
+      </div>` + friendBanner() + swapCards();
     if (!S.branches.length) return h + `<div class="card" style="align-items:flex-start"><span class="icon-chip t-brand">${ic('map-pin')}</span><h2>เริ่มจากเพิ่มสาขาแรก</h2><p class="muted">ใส่ชื่อสาขาและเวลาเปิด–ปิด แล้วเพิ่มพนักงาน</p><button class="btn primary" data-act="tab" data-tab="set">${ic('settings')}ไปที่ตั้งค่าร้าน</button></div>`;
     h += `<div class="card"><div class="card-head"><div class="row"><span class="icon-chip t-brand">${ic('store')}</span><h2>ตอนนี้ที่ร้าน</h2></div><button class="btn ghost" data-act="refresh">${ic('rotate-cw')}รีเฟรช</button></div><div class="grid">`;
     for (const br of opens) {
@@ -246,7 +257,34 @@
   function monthNav() {
     return `<div class="row"><button class="btn ghost" data-act="month" data-n="-1" aria-label="เดือนก่อน">${ic('chevron-left')}</button><h2 style="min-width:150px;text-align:center">${monthLabel(S.month)}</h2><button class="btn ghost" data-act="month" data-n="1" aria-label="เดือนถัดไป">${ic('chevron-right')}</button></div>`;
   }
+  function agenda(owner) {
+    const ws = addDays(S.sel, -dow(S.sel)), t = today(), me = M(S.me.member_id), fb = S.filter || '0';
+    const ptLimited = !owner && me.employment === 'parttime' && !S.org.pt_see_all;
+    let h = `<div class="card-head"><div class="row"><button class="btn ghost" data-act="week" data-n="-7" aria-label="สัปดาห์ก่อน">${ic('chevron-left')}</button><b style="min-width:150px;text-align:center">${dShort(ws)} – ${dShort(addDays(ws, 6))}</b><button class="btn ghost" data-act="week" data-n="7" aria-label="สัปดาห์ถัดไป">${ic('chevron-right')}</button></div>${owner ? `<select id="filter" data-change="filter" aria-label="เลือกสาขา"><option value="0">ทุกสาขา</option>${S.branches.map((br) => `<option value="${br.id}" ${fb === br.id ? 'selected' : ''}>${esc(br.name)}</option>`).join('')}</select>` : ''}</div><div class="agenda">`;
+    for (let i = 0; i < 7; i++) {
+      const d = addDays(ws, i);
+      let ss = S.shifts.filter((x) => x.work_date === d && (fb === '0' || !owner || x.branch_id === fb));
+      if (ptLimited) ss = ss.filter((x) => x.member_id === S.me.member_id);
+      const os = S.open.filter((x) => x.work_date === d && (fb === '0' || !owner || x.branch_id === fb) && (owner || canBranch(me, x.branch_id)));
+      const tot = ss.reduce((a, s) => a + mins(s.end_time) - mins(s.start_time), 0);
+      h += `<div class="dh ${d === t ? 'today' : ''}"><span>${dLong(d)}</span><span class="tiny">${ss.length ? `${ss.length} คน · ${Math.round(tot / 6) / 10} ชม.` : ''}</span></div>`;
+      const rows = [...ss.map((s) => ({ s, k: mins(s.start_time) })), ...os.map((o) => ({ o, k: mins(o.start_time) }))].sort((a, b) => a.k - b.k);
+      if (!rows.length) h += `<div class="empty-day">ไม่มีเวร</div>`;
+      for (const r of rows) {
+        if (r.o) { const o = r.o; h += `<button class="it" data-act="${owner ? 'editOpen' : 'pick'}" data-id="${o.id}" data-d="${d}"><span class="tm">${t5(o.start_time)}<br><span>${t5(o.end_time)}</span></span><span class="bar dash"></span><span class="who"><b style="color:var(--coral-deep)">เวรว่าง</b><span>${esc(B(o.branch_id).name)}${o.reason ? ' · ' + esc(o.reason) : ''}</span></span><span class="pill alert" style="font-size:11px">${ic('megaphone')}รอคนรับ</span></button>`; continue; }
+        const s = r.s, m = M(s.member_id), lv = S.leaves.find((l) => l.shift_id === s.id && l.status === 'pending');
+        let tag = '';
+        if (lv) tag = `<span class="pill warn" style="font-size:11px">${ic('plane')}ขอลา</span>`;
+        else if (owner && d === t && S.att) { const st = statusOf(s, lastAtt()[s.member_id]); tag = `<span class="pill ${st.c}" style="font-size:11px">${ic(st.i)}${st.t.replace(/^เข้างาน \d\d:\d\d · /, '')}</span>`; }
+        else if (m.employment === 'fulltime' && s.paid) tag = `<span class="pill ok" style="font-size:11px">เวรพิเศษ</span>`;
+        h += `<button class="it" data-act="${owner && d >= t ? 'editShift' : 'pick'}" data-id="${s.id}" data-d="${d}"><span class="tm">${t5(s.start_time)}<br><span>${t5(s.end_time)}</span></span><span class="bar" style="background:var(--${tone(m.color)})"></span><span class="who"><b>${esc(m.display_name)}</b><span>${esc(B(s.branch_id).name)} · ${esc(ROLE[m.role] || '')}${s.note ? ' · ' + esc(s.note) : ''}</span></span>${tag}</button>`;
+      }
+    }
+    return h + `</div>${owner ? '<p class="tiny muted">แตะเวรเพื่อแก้ไข · แตะเวรว่างเพื่อย้ายสาขาหรือมอบให้คน</p>' : ''}`;
+  }
+  const viewSeg = () => `<div class="seg" style="max-width:320px"><button data-act="calView" data-v="month" aria-pressed="${S.calView !== 'list'}">${ic('calendar-days')}รายเดือน</button><button data-act="calView" data-v="list" aria-pressed="${S.calView === 'list'}">${ic('list')}รายสัปดาห์</button></div>`;
   function ownerCal() {
+    if (S.calView === 'list') return viewSeg() + `<div class="card">${agenda(true)}</div>`;
     const [a, b] = monthRange(S.month), t = today(), fb = S.filter, all = fb === '0';
     let g = DOW.map((x, i) => `<div class="dow ${i === 0 || i === 6 ? 'we' : ''}">${x.replace('.', '')}</div>`).join('');
     for (let i = 0; i < dow(a); i++) g += `<div class="cell blank"></div>`;
@@ -263,7 +301,7 @@
       g += `<button class="cell ${d < t ? 'past' : ''} ${d === t ? 'today' : ''} ${d === S.sel ? 'sel' : ''}" data-act="pick" data-d="${d}" aria-label="${dLong(d)}"><span class="dnum">${Number(d.slice(8))}</span>${c}</button>`;
     }
     const legend = S.members.filter((m) => m.active && m.role !== 'owner').map((m) => `<span><i style="background:var(--${tone(m.color)})"></i>${esc(shortName(m.display_name))}</span>`).join('') + `<span><i style="background:var(--coral-soft);outline:1.5px dashed var(--coral)"></i>เวรว่าง</span><span><i style="background:var(--warn-soft)"></i>ขอลา</span>`;
-    return `<div class="calgrid">
+    return viewSeg() + `<div class="calgrid">
       <div class="card"><div class="card-head">${monthNav()}<select id="filter" data-change="filter" aria-label="เลือกสาขา"><option value="0">ทุกสาขา</option>${S.branches.map((br) => `<option value="${br.id}" ${fb === br.id ? 'selected' : ''}>${esc(br.name)}</option>`).join('')}</select></div>
         <div class="legend">${legend}</div><div class="cal">${g}</div>
         <p class="small muted">แตะวันเพื่อดูรายละเอียดและจัดเวร · ${S.branches.length > 1 ? 'ส1, ส2… คือลำดับสาขา' : ''}</p></div>
@@ -278,41 +316,85 @@
       const ss = S.shifts.filter((x) => x.work_date === d && x.branch_id === br.id), os = S.open.filter((x) => x.work_date === d && x.branch_id === br.id);
       h += `<div class="stack" style="background:var(--bg);border-radius:14px;padding:12px"><div class="between"><b>${esc(br.name)}</b><span class="tiny muted">${t5(br.open_time)}–${t5(br.close_time)}</span></div>`;
       if (!ss.length && !os.length) h += `<span class="small muted">ไม่มีเวร</span>`;
-      for (const s of ss) { const m = M(s.member_id); h += `<div class="row">${avatar(m.display_name, m.color, 'sm')}<span class="small grow">${esc(m.display_name)}${s.note ? ` <span class="muted">· ${esc(s.note)}</span>` : ''}</span><span class="small muted">${t5(s.start_time)}–${t5(s.end_time)}</span>${d >= t ? `<button class="btn ghost" data-act="delShift" data-id="${s.id}" aria-label="ลบเวร">${ic('trash-2')}</button>` : ''}</div>`; }
+      for (const s of ss) { const m = M(s.member_id); h += `<div class="row">${avatar(m.display_name, m.color, 'sm')}<span class="small grow">${esc(m.display_name)}${m.employment === 'fulltime' && s.paid ? ' <span class="pill ok" style="font-size:11px">เวรพิเศษ คิดรายชม.</span>' : ''}${s.note ? ` <span class="muted">· ${esc(s.note)}</span>` : ''}</span><span class="small muted">${t5(s.start_time)}–${t5(s.end_time)}</span>${d >= t ? `${s.member_id === S.me.member_id ? `<button class="btn ghost" data-act="swapSheet" data-id="${s.id}" aria-label="แลกเวร">${ic('repeat')}</button>` : ''}<button class="btn ghost" data-act="editShift" data-id="${s.id}" aria-label="แก้ไขเวร">${ic('pencil')}</button><button class="btn ghost" data-act="delShift" data-id="${s.id}" aria-label="ลบเวร">${ic('trash-2')}</button>` : ''}</div>`; }
       for (const o of os) {
         h += `<div class="small" style="color:var(--coral-deep)">${ic('circle-alert')} <b>เวรว่าง ${t5(o.start_time)}–${t5(o.end_time)}</b>${o.reason ? ' · ' + esc(o.reason) : ''}</div><div class="actions" style="display:flex;flex-wrap:wrap;gap:6px">`;
-        for (const m of S.members.filter((x) => x.active && x.role === 'pharmacist')) h += `<button class="btn ${avl.has(m.id) ? 'primary' : ''}" data-act="assign" data-open="${o.id}" data-m="${m.id}">${ic('user-plus')}${esc(shortName(m.display_name))}${avl.has(m.id) ? ' · ว่าง' : ''}</button>`;
-        h += `<button class="btn ghost" data-act="cancelOpen" data-id="${o.id}">ยกเลิกเวรว่าง</button></div>`;
+        for (const m of S.members.filter((x) => x.active && x.role === 'pharmacist' && canBranch(x, o.branch_id))) h += `<button class="btn ${avl.has(m.id) ? 'primary' : ''}" data-act="assign" data-open="${o.id}" data-m="${m.id}">${ic('user-plus')}${esc(shortName(m.display_name))}${avl.has(m.id) ? ' · ว่าง' : ''}</button>`;
+        h += `<button class="btn ghost" data-act="editOpen" data-id="${o.id}">${ic('pencil')}แก้ / ย้ายสาขา</button><button class="btn ghost" data-act="cancelOpen" data-id="${o.id}">ยกเลิกเวรว่าง</button></div>`;
       }
       h += `</div>`;
     }
     const names = S.members.filter((m) => avl.has(m.id)).map((m) => esc(shortName(m.display_name)));
     return h + `<p class="small muted">${ic('hand')} แจ้งว่าว่างวันนี้: ${names.length ? names.join(', ') : 'ยังไม่มี'}</p>`;
   }
-  function addShiftSheet() {
-    const d = S.sel, br = S.branches.find((x) => x.active) || S.branches[0];
+  function addShiftSheet(ed) {
+    const d = ed ? ed.work_date : S.sel, br = ed ? B(ed.branch_id) : (S.branches.find((x) => x.active) || S.branches[0]);
     const people = S.members.filter((m) => m.active);
-    sheet('เพิ่มเวร · ' + dShort(d), `
+    sheet((ed ? (ed.isOpen ? 'แก้เวรว่าง · ' : 'แก้ไขเวร · ') : 'เพิ่มเวร · ') + dShort(d), `
       <label class="field">สาขา<select id="sBranch" data-change="sBranch">${S.branches.filter((x) => x.active).map((x) => `<option value="${x.id}">${esc(x.name)}</option>`).join('')}</select></label>
       <label class="field">ใครเข้าเวร<select id="sWho"><option value="open">— เวรว่าง (ให้ part-time กดรับ) —</option>${people.map((m) => `<option value="${m.id}">${esc(m.display_name)} · ${esc(ROLE[m.role])}</option>`).join('')}</select></label>
       <div class="fields"><label class="field">เริ่ม<input id="sStart" type="time" value="${t5(br.open_time)}"></label><label class="field">ถึง<input id="sEnd" type="time" value="${t5(br.close_time)}"></label></div>
       <label class="field">หมายเหตุ (ไม่บังคับ)<input id="sNote" placeholder="เช่น เจ้าของไม่อยู่"></label>
-      <label class="row small"><input type="checkbox" id="sRepeat"> ทำซ้ำทุก${DOW[dow(d)].replace('.', '')}จนถึงสิ้นเดือน</label>
-      <button class="btn primary block" data-act="saveShift">${ic('check')}บันทึกเวร</button>`);
+      <label class="row small"><input type="checkbox" id="sPaid" ${ed && ed.paid ? 'checked' : ''}> เวรพิเศษ คิดเงินรายชั่วโมง (สำหรับ full-time ที่มาแทน · part-time คิดรายชั่วโมงทุกเวรอยู่แล้ว)</label>
+      ${ed ? '' : `<label class="row small"><input type="checkbox" id="sRepeat"> ทำซ้ำทุก${DOW[dow(d)].replace('.', '')}จนถึงสิ้นเดือน</label>`}
+      <button class="btn primary block" data-act="saveShift" data-id="${ed && !ed.isOpen ? ed.id : ''}" data-open="${ed && ed.isOpen ? ed.id : ''}">${ic('check')}บันทึกเวร</button>`);
+    if (ed) { document.getElementById('sBranch').value = ed.branch_id; document.getElementById('sWho').value = ed.isOpen ? 'open' : ed.member_id; document.getElementById('sStart').value = t5(ed.start_time); document.getElementById('sEnd').value = t5(ed.end_time); document.getElementById('sNote').value = (ed.isOpen ? ed.reason : ed.note) || ''; }
   }
 
   // ---------- OWNER: requests ----------
+  const STAT = { pending: ['wait', 'รออนุมัติ'], pending_peer: ['wait', 'รออีกฝ่ายตอบ'], pending_owner: ['wait', 'รอเจ้าของอนุมัติ'], approved: ['ok', 'อนุมัติแล้ว'], rejected: ['alert', 'ไม่อนุมัติ'], cancelled: ['wait', 'ยกเลิกแล้ว'] };
+  const statPill = (st) => { const x = STAT[st] || ['wait', st]; return `<span class="pill ${x[0]}" style="font-size:11px">${x[1]}</span>`; };
+  function reqItems(list) {
+    const it = [];
+    for (const l of list.leaves || []) it.push({ at: l.created_at, tag: '<span class="tag lv">ลา</span>', who: l.member_id, txt: `${esc(B(l.branch_id).name)} · ${dShort(l.work_date)} ${t5(l.start_time)}–${t5(l.end_time)}${l.reason ? ' · ' + esc(l.reason) : ''}`, st: l.status });
+    for (const f of list.fixes || []) it.push({ at: f.created_at, tag: '<span class="tag fx">แก้เวลา</span>', who: f.member_id, txt: `${f.kind === 'in' ? 'เข้างาน' : 'ออกงาน'} ${dShort(todayStr(S.tz, new Date(f.requested_at)))} ${fmtTime(f.requested_at, S.tz)} · ${esc(f.reason)}`, st: f.status });
+    for (const c of list.claims || []) { const o = c.open_shifts || {}; it.push({ at: c.created_at, tag: '<span class="tag cl">รับเวร</span>', who: c.member_id, txt: o.work_date ? `${esc(B(o.branch_id).name)} · ${dShort(o.work_date)} ${t5(o.start_time)}–${t5(o.end_time)}` : 'เวรว่าง', st: c.status }); }
+    for (const w of list.swaps || []) it.push({ at: w.created_at, tag: `<span class="tag sw">${w.to_shift_id ? 'แลกเวร' : 'ยกเวร'}</span>`, who: w.from_member, txt: swapLine(w), st: w.status });
+    for (const o of list.ots || []) it.push({ at: o.decided_at, tag: '<span class="tag ot">OT</span>', who: o.member_id, txt: dShort(o.work_date), st: o.approved ? 'approved' : 'rejected' });
+    it.sort((a, b) => (b.at || '').localeCompare(a.at || ''));
+    return it.length ? it.map((x) => { const m = M(x.who); return `<div class="req-it">${avatar(m.display_name, m.color, 'sm')}<div class="grow"><div class="between"><b class="small">${x.tag}${esc(m.display_name)}</b>${statPill(x.st)}</div><span class="small">${x.txt}</span><br><span class="tiny muted">${x.at ? dShort(todayStr(S.tz, new Date(x.at))) + ' ' + fmtTime(x.at, S.tz) : ''}</span></div></div>`; }).join('') : `<div class="empty">${ic('inbox', 'ic-lg')}<span class="small">ยังไม่มีรายการ</span></div>`;
+  }
+  const reqSeg = (pend) => `<div class="seg" style="max-width:420px"><button data-act="reqView" data-v="pending" aria-pressed="${S.reqView !== 'done'}">${ic('bell')}รออนุมัติ${pend ? ` (${pend})` : ''}</button><button data-act="reqView" data-v="done" aria-pressed="${S.reqView === 'done'}">${ic('history')}ประวัติ 60 วัน</button></div>`;
   function ownerReq() {
-    let h = `<h1>คำขอรออนุมัติ</h1>`;
-    if (!S.claims.length && !S.leaves.length && !S.fixes.length && !S.ot.length && !ownerSwaps().length) return h + `<div class="card"><div class="empty">${ic('coffee', 'ic-lg')}<b>ไม่มีอะไรค้าง</b><span class="small">คำขอรับเวร ขอลา และขอแก้เวลาจะขึ้นที่นี่</span></div></div>`;
+    const pend = S.claims.length + S.leaves.length + S.fixes.length + S.ot.length + ownerSwaps().length;
+    if (S.reqView === 'done') {
+      if (!S.hist) { loadHist(); return reqSeg(pend) + `<div class="card"><div class="empty"><div class="spinner"></div></div></div>`; }
+      return reqSeg(pend) + `<div class="card">${reqItems(S.hist)}</div>`;
+    }
+    let h = `<h1>คำขอรออนุมัติ</h1>` + reqSeg(pend);
+    if (!S.claims.length && !S.leaves.length && !S.fixes.length && !S.ot.length && !(S.swaps || []).some(PEND)) return h + `<div class="card"><div class="empty">${ic('coffee', 'ic-lg')}<b>ไม่มีอะไรค้าง</b><span class="small">คำขอรับเวร ขอลา และขอแก้เวลาจะขึ้นที่นี่</span></div></div>`;
     for (const c of S.claims) { const o = c.open_shifts, m = M(c.member_id); h += `<div class="card"><div class="row">${avatar(m.display_name, m.color)}<div class="grow"><b>${esc(m.display_name)} ขอรับเวร</b><br><span class="small">${esc(B(o.branch_id).name)} · ${dShort(o.work_date)} · ${t5(o.start_time)}–${t5(o.end_time)}</span></div></div><div class="row"><button class="btn primary" data-act="approveClaim" data-open="${o.id}" data-m="${c.member_id}">${ic('check')}อนุมัติ</button><button class="btn" data-act="rejectClaim" data-id="${c.id}">ไม่อนุมัติ</button></div></div>`; }
     for (const l of S.leaves) { const m = M(l.member_id); h += `<div class="card"><div class="row">${avatar(m.display_name, m.color)}<div class="grow"><b>${esc(m.display_name)} ขอลา</b><br><span class="small">${esc(B(l.branch_id).name)} · ${dShort(l.work_date)} · ${t5(l.start_time)}–${t5(l.end_time)}</span>${l.reason ? `<br><span class="small muted">เหตุผล: ${esc(l.reason)}</span>` : ''}</div></div>${m.role === 'pharmacist' ? `<span class="tiny muted">อนุมัติแล้ว ระบบโพสต์เป็นเวรว่างให้ part-time อัตโนมัติ</span>` : ''}<div class="row"><button class="btn primary" data-act="decideLeave" data-id="${l.id}" data-ok="1">${ic('check')}อนุมัติ</button><button class="btn" data-act="decideLeave" data-id="${l.id}" data-ok="0">ไม่อนุมัติ</button></div></div>`; }
     for (const o of S.ot) { const m = M(o.member_id); const hrs = (n) => `${Math.floor(n / 60)} ชม. ${n % 60} นาที`;
       h += `<div class="card"><div class="row">${avatar(m.display_name, m.color)}<div class="grow"><b>${esc(m.display_name)} ทำงานเกินเวลาเวร (OT)</b><br><span class="small">${dShort(o.work_date)} · ลงเวลา ${fmtTime(o.first_in, S.tz)}–${fmtTime(o.last_out, S.tz)}</span><br><span class="small muted">ในเวลาเวร ${hrs(o.in_shift_min)} · เกินเวร <b>${hrs(o.extra_min)}</b>${o.in_shift_min === 0 ? ' (วันนี้ไม่มีเวรในตาราง)' : ''}</span></div></div>
         <span class="tiny muted">อนุมัติ = จ่ายตามเวลาจริงทั้งวัน · ไม่อนุมัติ = จ่ายเฉพาะในเวลาเวร</span>
         <div class="row"><button class="btn primary" data-act="decideOt" data-m="${o.member_id}" data-d="${o.work_date}" data-ok="1">${ic('check')}อนุมัติ OT</button><button class="btn" data-act="decideOt" data-m="${o.member_id}" data-d="${o.work_date}" data-ok="0">ไม่อนุมัติ</button></div></div>`; }
+    for (const w of (S.swaps || []).filter((x) => x.status === 'pending_peer' && x.to_member !== S.me.member_id && x.from_member !== S.me.member_id)) h += `<div class="card" style="flex-direction:row;align-items:center"><span class="icon-chip t-lilac">${ic('hourglass')}</span><span class="grow small"><b>รอ ${esc(M(w.to_member).display_name)} ตอบรับการ${w.to_shift_id ? 'แลก' : 'ยก'}เวร</b><br>${swapLine(w)}</span></div>`;
+    h += swapCards();
     for (const w of ownerSwaps()) h += `<div class="card"><div class="row"><span class="icon-chip t-lilac">${ic('repeat')}</span><div class="grow"><b>ขอ${w.to_shift_id ? 'แลก' : 'ยก'}เวร (ทั้งสองคนตกลงแล้ว)</b><br>${swapLine(w)}</div></div><div class="row"><button class="btn primary" data-act="decideSwap" data-id="${w.id}" data-ok="1">${ic('check')}อนุมัติ</button><button class="btn" data-act="decideSwap" data-id="${w.id}" data-ok="0">ไม่อนุมัติ</button></div></div>`;
     for (const f of S.fixes) { const m = M(f.member_id); h += `<div class="card"><div class="row">${avatar(m.display_name, m.color)}<div class="grow"><b>${esc(m.display_name)} ขอแก้เวลา${f.kind === 'in' ? 'เข้างาน' : 'ออกงาน'}</b><br><span class="small">${esc(B(f.branch_id).name)} · ${dShort(todayStr(S.tz, new Date(f.requested_at)))} ${fmtTime(f.requested_at, S.tz)}</span><br><span class="small muted">เหตุผล: ${esc(f.reason)}</span></div></div><div class="row"><button class="btn primary" data-act="decideFix" data-id="${f.id}" data-ok="1">${ic('check')}อนุมัติ</button><button class="btn" data-act="decideFix" data-id="${f.id}" data-ok="0">ไม่อนุมัติ</button></div></div>`; }
+    return h;
+  }
+
+  async function loadHist() {
+    const o = S.me.org_id, since = new Date(Date.now() - 60 * 86400e3).toISOString();
+    try {
+      const [leaves, fixes, claims, ots] = await Promise.all([
+        q(sb.from('leave_requests').select('*').eq('org_id', o).neq('status', 'pending').gte('created_at', since).order('created_at', { ascending: false })),
+        q(sb.from('attendance_fixes').select('*').eq('org_id', o).neq('status', 'pending').gte('created_at', since)),
+        q(sb.from('shift_claims').select('*, open_shifts!inner(*)').eq('open_shifts.org_id', o).neq('status', 'pending').gte('created_at', since)),
+        q(sb.from('ot_approvals').select('*').gte('decided_at', since)),
+      ]);
+      S.hist = { leaves, fixes, claims, ots: ots.filter((x) => S.members.some((m) => m.id === x.member_id)), swaps: (S.swaps || []).filter((w) => !PEND(w)) };
+    } catch (e) { S.hist = {}; toast(errMsg(e), 'err'); }
+    if (S.tab === 'req') render();
+  }
+  function staffReq() {
+    const mine = (x) => x.member_id === S.me.member_id;
+    const pendN = S.leaves.filter((l) => mine(l) && l.status === 'pending').length + S.fixes.filter((f) => f.status === 'pending').length + S.claims.filter((c) => c.status === 'pending').length + (S.swaps || []).filter((w) => PEND(w) && (w.from_member === S.me.member_id || w.to_member === S.me.member_id)).length;
+    let h = `<h1>คำขอ</h1>` + swapCards();
+    h += `<div class="card"><b class="small">สร้างคำขอ</b><div class="row" style="flex-wrap:wrap"><button class="btn" data-act="tab" data-tab="cal">${ic('calendar-x')}ขอลา / แลกเวร</button><button class="btn" data-act="fixSheet">${ic('alarm-clock')}ขอแก้เวลา</button>${isPharm(M(S.me.member_id)) ? `<button class="btn" data-act="tab" data-tab="open">${ic('megaphone')}รับเวรว่าง</button>` : ''}</div><span class="tiny muted">ขอลาและแลกเวร: แตะวันที่มีเวรในปฏิทิน</span></div>`;
+    h += `<div class="card"><div class="between"><b>คำขอของฉัน</b>${pendN ? `<span class="pill wait">รออยู่ ${pendN}</span>` : ''}</div>${reqItems({ leaves: S.leaves.filter(mine), fixes: S.fixes, claims: S.claims, swaps: (S.swaps || []).filter((w) => w.from_member === S.me.member_id || w.to_member === S.me.member_id) })}</div>`;
     return h;
   }
 
@@ -327,9 +409,16 @@
     try {
       const rows = await rpc('month_hours', { p_org: S.me.org_id, p_month: S.month + '-01' });
       if (S.isOwner) {
-        const list = rows.filter((r) => M(r.member_id).role !== 'owner' && (!M(r.member_id).clock_free || Number(r.actual_hours) > 0));
+        let det = []; try { det = await rpc('month_detail', { p_org: S.me.org_id, p_month: S.month + '-01' }); } catch (_) {}
+        S.detail = det;
+        const lateBy = {}; const seen = new Set();
+        det.forEach((r) => { const k = r.member_id + r.work_date; if (seen.has(k)) return; seen.add(k); const lk = lateKind(r.late_min); if (!lk) return; (lateBy[r.member_id] = lateBy[r.member_id] || { ok: 0, warn: 0, alert: 0 })[lk]++; });
+        S.lateBy = lateBy;
+        const list = rows.filter((r) => M(r.member_id).role !== 'owner' && (!M(r.member_id).clock_free || Number(r.actual_hours) > 0 || Number(r.extras) !== 0));
         const total = list.reduce((a, r) => a + Number(r.amount || 0), 0);
-        el.innerHTML = `<div style="overflow-x:auto"><table><thead><tr><th>ชื่อ</th><th class="r">คิดเงิน (ชม.)</th><th class="r">เวลาจริง</th><th class="r">บาท/ชม.</th><th class="r">ยอด</th></tr></thead><tbody>${list.map((r) => { const m = M(r.member_id); return `<tr><td><div class="row">${avatar(m.display_name, m.color, 'sm')}<span>${esc(m.display_name)}<br><span class="tiny muted">${esc(EMP[m.employment])}</span></span></div></td><td class="r">${Number(r.hours).toFixed(2)}${Number(r.ot_pending_hours) > 0 ? `<br><span class="pill warn" style="font-size:11px">OT รอ ${Number(r.ot_pending_hours).toFixed(2)}</span>` : ''}</td><td class="r muted">${Number(r.actual_hours).toFixed(2)}</td><td class="r"><input class="rate" type="number" min="0" step="5" value="${r.hourly_rate ?? ''}" placeholder="—" data-change="rate" data-m="${r.member_id}" aria-label="ค่าจ้างต่อชั่วโมง ${esc(m.display_name)}"></td><td class="r"><b>฿${baht(r.amount)}</b></td></tr>`; }).join('')}</tbody><tfoot><tr><td colspan="4"><b>รวม</b></td><td class="r"><b>฿${baht(total)}</b></td></tr></tfoot></table></div>`;
+        const lateCell = (id) => { const L = lateBy[id]; if (!L) return '<span class="muted">—</span>'; return `<span class="pill ok" style="font-size:11px">${L.ok}</span> <span class="pill warn" style="font-size:11px">${L.warn}</span> <span class="pill alert" style="font-size:11px">${L.alert}</span>`; };
+        el.innerHTML = `<div style="overflow-x:auto"><table><thead><tr><th>ชื่อ</th><th class="r">คิดเงิน (ชม.)</th><th class="r">เวลาจริง</th><th class="r">บาท/ชม.</th><th class="r">เงินพิเศษ</th><th class="r">ยอด</th><th>การเข้างาน</th></tr></thead><tbody>${list.map((r) => { const m = M(r.member_id); return `<tr><td><div class="row">${avatar(m.display_name, m.color, 'sm')}<span>${esc(m.display_name)}<br><span class="tiny muted">${esc(EMP[m.employment])}${m.employment === 'fulltime' ? ' · คิดเฉพาะเวรพิเศษ/OT' : ''}</span></span></div></td><td class="r">${Number(r.hours).toFixed(2)}${Number(r.ot_pending_hours) > 0 ? `<br><span class="pill warn" style="font-size:11px">OT รอ ${Number(r.ot_pending_hours).toFixed(2)}</span>` : ''}</td><td class="r muted">${Number(r.actual_hours).toFixed(2)}</td><td class="r"><input class="rate" type="number" min="0" step="5" value="${r.hourly_rate ?? ''}" placeholder="—" data-change="rate" data-m="${r.member_id}" aria-label="ค่าจ้างต่อชั่วโมง ${esc(m.display_name)}"></td><td class="r"><button class="btn ghost" data-act="adjSheet" data-m="${r.member_id}">${Number(r.extras) ? '฿' + baht(r.extras) : ic('plus')}</button></td><td class="r"><b>฿${baht(r.amount)}</b></td><td style="white-space:nowrap">${lateCell(r.member_id)}</td></tr>`; }).join('')}</tbody><tfoot><tr><td colspan="5"><b>รวม</b></td><td class="r"><b>฿${baht(total)}</b></td><td></td></tr></tfoot></table></div>
+          <p class="tiny muted">การเข้างาน (นับวัน): <span class="pill ok" style="font-size:11px">ตรงเวลา</span> <span class="pill warn" style="font-size:11px">สายในเกณฑ์ ≤ ${grace()} นาที</span> <span class="pill alert" style="font-size:11px">สายเกินเกณฑ์</span> · เงินพิเศษ เช่น ค่าเดินทาง กดที่ช่อง "เงินพิเศษ" เพื่อเพิ่ม</p>`;
       } else {
         const r = rows[0] || { hours: 0, hourly_rate: S.pay[S.me.member_id] || 0, amount: 0 };
         el.innerHTML = `<div class="shift-hero"><span class="small" style="opacity:.9">ยอดเดือน${monthLabel(S.month)}</span><div class="time">฿${baht(r.amount)}</div><span class="small" style="opacity:.9">${Number(r.hours).toFixed(2)} ชม. × ${baht(r.hourly_rate)} บาท</span>${Number(r.ot_pending_hours) > 0 ? `<span class="pill">${ic('hourglass')}OT ${Number(r.ot_pending_hours).toFixed(2)} ชม. รอเจ้าของอนุมัติ</span>` : ''}</div>`; icons();
@@ -349,10 +438,11 @@
         <label class="row small"><input type="checkbox" id="oClip" ${S.org.clip_to_shift ? 'checked' : ''}> คิดชั่วโมงไม่เกินเวลาเวร (ทำเกินเวรเป็น OT ต้องอนุมัติก่อนจ่าย)</label>
         <label class="field">ไม่นับส่วนที่เกินเวรน้อยกว่า<select id="oOtMin">${[0, 10, 15, 30].map((n) => `<option value="${n}" ${(S.org.ot_min_minutes ?? 15) === n ? 'selected' : ''}>${n ? n + ' นาที' : 'นับทุกนาที'}</option>`).join('')}</select></label>
         <label class="row small"><input type="checkbox" id="oSelf" ${S.org.allow_self_approve ? 'checked' : ''}> ให้ผู้จัดการอนุมัติคำขอของตัวเองได้ (เจ้าของร้านอนุมัติได้เสมอ)</label>
+        <label class="row small"><input type="checkbox" id="oPtAll" ${S.org.pt_see_all ? 'checked' : ''}> ให้ part-time เห็นตารางเวรของคนอื่น (ปิด = เห็นเฉพาะเวรตัวเองและเวรว่าง)</label>
         <label class="row small"><input type="checkbox" id="oGps" ${S.org.require_gps ? 'checked' : ''}> บังคับเปิดตำแหน่ง (GPS) ทุกครั้งที่สแกน (ไม่เปิด = สแกนไม่ได้)</label>
         <button class="btn primary" data-act="saveOrg">${ic('check')}บันทึก</button>
         <div class="stack small" style="border-top:1px solid var(--line);padding-top:12px"><b>ลิงก์แอปสำหรับพนักงาน</b><div class="row"><span class="code" style="font-size:12px;letter-spacing:0;overflow:hidden;text-overflow:ellipsis">${esc(liffUrl)}</span><button class="btn ghost" data-act="copy" data-text="${esc(liffUrl)}">${ic('copy')}</button></div>
-        <b>ลิงก์จอที่ร้าน (เปิดบนโทรศัพท์ร้าน)</b><div class="row"><span class="code" style="font-size:12px;letter-spacing:0;overflow:hidden;text-overflow:ellipsis">${esc(kioskUrl)}</span><button class="btn ghost" data-act="copy" data-text="${esc(kioskUrl)}">${ic('copy')}</button></div><span class="muted" style="font-size:11px">เวอร์ชัน 2 พ.ย. 69 (อัปเดตทันที · ยืนยันวันว่าง · ช่วยเปิด GPS)</span></div></div>
+        <b>ลิงก์จอที่ร้าน (เปิดบนโทรศัพท์ร้าน)</b><div class="row"><span class="code" style="font-size:12px;letter-spacing:0;overflow:hidden;text-overflow:ellipsis">${esc(kioskUrl)}</span><button class="btn ghost" data-act="copy" data-text="${esc(kioskUrl)}">${ic('copy')}</button></div><span class="muted" style="font-size:11px">เวอร์ชัน 3 พ.ย. 69 ชุด A (สัปดาห์นี้ · รายสัปดาห์ · ศูนย์คำขอ · โปรไฟล์)</span></div></div>
       <div class="card"><div class="card-head"><div class="row"><span class="icon-chip t-sky">${ic('map-pin')}</span><h2>สาขา</h2></div><button class="btn" data-act="editBranch">${ic('plus')}เพิ่มสาขา</button></div>`;
     if (!S.branches.length) h += `<p class="small muted">ยังไม่มีสาขา กด "เพิ่มสาขา" เพื่อเริ่ม</p>`;
     for (const br of S.branches) h += `<div class="list-row" style="flex-wrap:wrap"><div class="grow"><b>${esc(br.name)}</b>${br.active ? '' : ' <span class="pill wait">ปิดใช้งาน</span>'}<br><span class="small muted">${t5(br.open_time)}–${t5(br.close_time)}${br.lat != null ? ' · ตั้งตำแหน่งแล้ว' : ' · ยังไม่ตั้งตำแหน่ง'}</span></div><button class="btn ghost" data-act="pairKiosk" data-id="${br.id}">${ic('monitor-smartphone')}จับคู่จอ QR</button>${br.allow_static ? `<a class="btn ghost" href="print.html?b=${br.id}" target="_blank" rel="noopener">${ic('printer')}ปริ้น QR ติดผนัง</a>` : ''}<button class="btn ghost" data-act="editBranch" data-id="${br.id}" aria-label="แก้ไขสาขา">${ic('pencil')}</button></div>`;
@@ -399,8 +489,9 @@
       <div class="fields"><label class="field">ตำแหน่ง<select id="mRole"><option value="pharmacist">เภสัชกร</option><option value="assistant">ผู้ช่วยเภสัช</option><option value="manager">ผู้จัดการ (ดูแลร้านได้)</option>${S.me.role === 'owner' ? '<option value="owner">เจ้าของร่วม</option>' : ''}</select></label>
         <label class="field">การจ้าง<select id="mEmp"><option value="parttime">Part-time</option><option value="fulltime">ประจำ</option></select></label></div>
       <div class="fields"><label class="field">สาขาหลัก<select id="mBranch"><option value="">— ไม่ระบุ —</option>${S.branches.map((b) => `<option value="${b.id}">${esc(b.name)}</option>`).join('')}</select></label>
-        <label class="field">ค่าจ้าง/ชม. (บาท)<input id="mRate" type="number" min="0" step="5" value="${S.pay[m.id] ?? ''}" placeholder="เฉพาะ part-time"></label></div>
+        <label class="field">ค่าจ้าง/ชม. (บาท)<input id="mRate" type="number" min="0" step="5" value="${S.pay[m.id] ?? ''}" placeholder="part-time หรือเวรพิเศษ/OT ของ full-time"></label></div>
       <label class="row small"><input type="checkbox" id="mFree" ${m.clock_free ? 'checked' : ''}> ไม่ต้องสแกนเข้า–ออกงาน (เช่น คนที่เปิด–ปิดร้านประจำ ไม่คิดค่าจ้างรายชั่วโมง)</label>
+      ${S.branches.length > 1 ? `<div class="stack small" style="gap:4px"><b>สาขาที่ทำได้</b><span class="tiny muted">ใช้กับ part-time: เห็นและได้แจ้งเตือนเวรว่างเฉพาะสาขาที่ติ๊ก · ไม่ติ๊กเลย = ทุกสาขา</span><div class="row" style="flex-wrap:wrap;gap:10px">${S.branches.map((b) => `<label class="row small"><input type="checkbox" data-mb="${b.id}" ${(m.branch_ids || []).includes(b.id) ? 'checked' : ''}> ${esc(b.name)}</label>`).join('')}</div></div>` : ''}
       <label class="row small"><input type="checkbox" id="mNotify" ${m.notify !== false ? 'checked' : ''}> ส่งแจ้งเตือนทาง LINE ให้คนนี้</label>
       <label class="field">สีประจำตัว<select id="mColor">${TONES.map((t) => `<option value="${t}">${TONE_TH[t]}</option>`).join('')}</select></label>
       ${id ? `<label class="row small"><input type="checkbox" id="mActive" ${m.active ? 'checked' : ''}> ยังทำงานอยู่ (เอาออกเพื่อปิดการเข้าถึง)</label>` : `<p class="small muted">บันทึกแล้วจะได้รหัสเชิญ 8 ตัว ส่งให้พนักงานใส่ในแอปครั้งเดียว</p>`}
@@ -415,8 +506,29 @@
   const myShifts = () => S.shifts.filter((s) => s.member_id === S.me.member_id);
   const myClaim = (oid) => S.claims.find((c) => c.open_shift_id === oid && c.status === 'pending');
   const conflictFor = (o) => myShifts().find((s) => s.work_date === o.work_date && mins(s.start_time) < mins(o.end_time) && mins(o.start_time) < mins(s.end_time));
-  const openForMe = () => S.open.filter((o) => o.work_date >= today());
+  const canBranch = (m, b) => !m || m.employment !== 'parttime' || !m.branch_ids || !m.branch_ids.length || m.branch_ids.includes(b);
+  const openForMe = () => S.open.filter((o) => o.work_date >= today() && canBranch(M(S.me.member_id), o.branch_id));
 
+  // ---------- สัปดาห์นี้ (แถบ 7 วัน + ชั่วโมง) ----------
+  function workedMin(att) {
+    let m = 0, inAt = null;
+    for (const a of att) { if (a.kind === 'in') inAt = new Date(a.at); else if (inAt) { m += (new Date(a.at) - inAt) / 6e4; inAt = null; } }
+    if (inAt && isToday(inAt.toISOString())) m += (Date.now() - inAt) / 6e4;
+    return Math.round(m);
+  }
+  function weekCard() {
+    const t = today(), ws = addDays(t, -dow(t)), mine = myShifts();
+    let cells = '', sch = 0;
+    for (let i = 0; i < 7; i++) {
+      const d = addDays(ws, i), ss = mine.filter((x) => x.work_date === d), lv = ss.some((s) => S.leaves.find((l) => l.shift_id === s.id && l.status === 'pending'));
+      ss.forEach((s) => { sch += mins(s.end_time) - mins(s.start_time); });
+      cells += `<div class="${ss.length ? 'on' : ''} ${d === t ? 'today' : ''} ${lv ? 'lv' : ''}"><b>${DOW[i].replace('.', '')}</b>${ss.length ? ss.map((s) => `${t5(s.start_time)}<br>${t5(s.end_time)}`).join('<br>') : 'ไม่มี<br>เวร'}</div>`;
+    }
+    const wk = workedMin((S.myAtt || []).filter((a) => todayStr(S.tz, new Date(a.at)) >= ws)), pct = sch ? Math.min(100, wk / sch * 100) : (wk ? 100 : 0);
+    const fmt = (m) => `${Math.floor(m / 60)} ชม.${m % 60 ? ' ' + (m % 60) + ' น.' : ''}`;
+    return `<div class="card"><div class="between"><h3>สัปดาห์นี้</h3><span class="tiny muted">${dShort(ws)} – ${dShort(addDays(ws, 6))}</span></div><div class="wk">${cells}</div>
+      ${M(S.me.member_id).clock_free ? '' : `<div class="between small"><span><b style="color:var(--teal-deep)">${fmt(wk)}</b> <span class="muted">ทำแล้ว</span></span><span class="muted">ตามตาราง ${fmt(sch)}</span></div><div class="hbar"><i class="${wk > sch && sch ? 'over' : ''}" style="width:${pct}%"></i></div>`}</div>`;
+  }
   function staffHome() {
     const me = M(S.me.member_id), t = today(), mine = myShifts().filter((s) => s.work_date === t), on = inNow(S.myLast), free = me.clock_free && !on;
     const s0 = mine[0], night = s0 ? mins(s0.start_time) >= 900 : nowMins(S.tz) >= 17 * 60;
@@ -425,16 +537,14 @@
       <div class="time">${s0 ? `${t5(s0.start_time)} – ${t5(s0.end_time)}` : hm(nowMins(S.tz))}</div>
       ${free ? `<span class="small" style="opacity:.9;text-align:center">${ic('user-check')} คุณไม่ต้องสแกนเข้า–ออกงาน เจ้าของร้านตั้งไว้ให้แล้ว</span>` : on ? `<textarea id="note" placeholder="ฝากถึงคนเข้าเวรถัดไป (ไม่บังคับ) เช่น ยาใกล้หมด คนไข้นัดรับยา"></textarea><button class="go" data-act="scan" data-kind="out">${ic('log-out', 'ic-lg')}ออกงาน</button>`
         : `<button class="go" data-act="scan" data-kind="in">${ic('scan-line', 'ic-lg')}เข้างาน</button><span class="tiny" style="opacity:.9;text-align:center">${!s0 && S.org.require_shift && me.role !== 'owner' ? 'วันนี้ไม่มีเวร จะสแกนเข้างานได้เมื่อเจ้าของร้านเพิ่มเวรให้' : 'สแกน QR บนจอร้าน'}</span>`}</div>`;
-    h += friendBanner();
-    for (const w of (S.swaps || []).filter((x) => x.status === 'pending_peer' && x.to_member === S.me.member_id)) h += `<div class="card" style="border:1.5px solid var(--brand)"><div class="row"><span class="icon-chip t-lilac">${ic('repeat')}</span><div class="grow"><b>${esc(M(w.from_member).display_name)} ขอ${w.to_shift_id ? 'แลก' : 'ยก'}เวรให้คุณ</b><br>${swapLine(w)}</div></div><div class="row"><button class="btn primary" data-act="respondSwap" data-id="${w.id}" data-ok="1">${ic('check')}ตกลง</button><button class="btn" data-act="respondSwap" data-id="${w.id}" data-ok="0">ไม่สะดวก</button></div><span class="tiny muted">ตกลงแล้วต้องรอเจ้าของร้านอนุมัติอีกครั้ง</span></div>`;
-    for (const w of (S.swaps || []).filter((x) => x.from_member === S.me.member_id)) h += `<div class="card" style="flex-direction:row;align-items:center"><span class="icon-chip t-lilac">${ic('repeat')}</span><span class="grow small"><b>${w.status === 'pending_peer' ? `รอ ${esc(M(w.to_member).display_name)} ตอบ` : 'รอเจ้าของร้านอนุมัติ'}</b><br>${swapLine(w)}</span><button class="btn ghost" data-act="cancelSwap" data-id="${w.id}">ยกเลิก</button></div>`;
+    h += weekCard() + friendBanner() + swapCards();
     if (!me.clock_free && forgotOut(S.myLast)) h += `<div class="card" style="flex-direction:row;align-items:center;border:1.5px solid var(--warn)"><span class="icon-chip t-sun">${ic('alarm-clock')}</span><span class="grow small"><b>ลืมกดออกงานเมื่อ${dShort(todayStr(S.tz, new Date(S.myLast.at)))}</b><br>วันนั้นยังไม่ถูกนับชั่วโมง กดขอแก้เวลาออกงานเพื่อให้เจ้าของอนุมัติ</span><button class="btn" data-act="fixSheet" data-kind="out" data-date="${todayStr(S.tz, new Date(S.myLast.at))}">ขอแก้</button></div>`;
     const bId = s0?.branch_id || me.home_branch_id;
     const notes = S.handover.filter((n) => (!bId || n.branch_id === bId) && Date.now() - new Date(n.created_at).getTime() < 3 * 86400e3).slice(0, 3);
     if (notes.length) h += `<div class="card"><div class="row"><span class="icon-chip t-sun">${ic('notebook-pen')}</span><h3>บันทึกส่งเวรล่าสุด</h3></div>${notes.map((n) => `<div class="stack" style="gap:2px"><span class="small">${esc(n.body)}</span><span class="tiny muted">${esc(M(n.member_id).display_name)} · ${dShort(todayStr(S.tz, new Date(n.created_at)))} ${fmtTime(n.created_at, S.tz)}</span></div>`).join('')}</div>`;
     if (isPharm(me)) { const n = openForMe().filter((o) => !conflictFor(o) && !myClaim(o.id)).length; if (n) h += `<button class="card" data-act="tab" data-tab="open" style="flex-direction:row;align-items:center;border:0;text-align:left;cursor:pointer"><span class="icon-chip t-coral">${ic('megaphone')}</span><span class="grow"><b>มีเวรว่าง ${n} เวรที่รับได้</b><br><span class="small muted">แตะเพื่อดูและกดรับ</span></span>${ic('chevron-right')}</button>`; }
-    const up = myShifts().filter((s) => s.work_date > t).slice(0, 5);
-    h += `<div class="card"><h3>เวรที่จะถึง</h3>${up.length ? up.map((s) => `<div class="between small"><span>${dShort(s.work_date)} · ${esc(B(s.branch_id).name)}</span><span class="muted">${t5(s.start_time)}–${t5(s.end_time)}</span></div>`).join('') : '<span class="small muted">ยังไม่มีเวรล่วงหน้า</span>'}</div>`;
+    const up = myShifts().filter((s) => s.work_date > addDays(t, 6 - dow(t))).slice(0, 4);
+    if (up.length) h += `<div class="card"><h3>เวรถัดไป</h3>${up.map((s) => `<div class="between small"><span>${dShort(s.work_date)} · ${esc(B(s.branch_id).name)}</span><span class="muted">${t5(s.start_time)}–${t5(s.end_time)}</span></div>`).join('')}</div>`;
     const pf = S.fixes.filter((f) => f.status === 'pending').length;
     h += `<div class="between small"><button class="link" data-act="fixSheet">${ic('alarm-clock')} ลืมลงเวลา? ขอแก้เวลา</button>${pf ? `<span class="pill warn">รออนุมัติ ${pf}</span>` : ''}</div>`;
     return h;
@@ -451,10 +561,11 @@
       else if (s) style = `background:var(--${tone(me.color)});color:${tone(me.color) === 'sun' ? '#3B2700' : '#fff'};box-shadow:none`;
       if (canAvail && availSet.has(d)) cls += ' avail';
       if (d === S.sel && S.ptMode !== 'avail') cls += ' sel';
-      const dot = isPharm(me) && d >= t && S.open.some((o) => o.work_date === d && !conflictFor(o));
+      const dot = isPharm(me) && d >= t && S.open.some((o) => o.work_date === d && !conflictFor(o) && canBranch(me, o.branch_id));
       g += `<button class="mcell ${d < t ? 'past' : ''} ${d === t ? 'today' : ''} ${cls}" style="${style}" data-act="${S.ptMode === 'avail' ? 'toggleAvail' : 'pick'}" data-d="${d}" aria-label="${dLong(d)}">${Number(d.slice(8))}${dot ? '<span class="od"></span>' : ''}</button>`;
     }
-    let h = `<div class="between">${monthNav()}</div>`;
+    if (S.calView === 'list' && S.ptMode !== 'avail') return viewSeg() + `<div class="card">${agenda(false)}</div>`;
+    let h = viewSeg() + `<div class="between">${monthNav()}</div>`;
     if (canAvail) h += `<div class="seg"><button data-act="ptMode" data-m="view" aria-pressed="${S.ptMode !== 'avail'}">${ic('eye')}ดูเวร</button><button data-act="ptMode" data-m="avail" aria-pressed="${S.ptMode === 'avail'}">${ic('hand')}แจ้งวันว่าง</button></div>`;
     h += `<div class="card"><div class="mini">${g}</div><div class="legend"><span><i style="background:var(--${tone(me.color)})"></i>เวรของฉัน</span>${canAvail ? '<span><i style="box-shadow:inset 0 0 0 2px var(--brand)"></i>แจ้งว่าว่าง</span>' : ''}${isPharm(me) ? '<span><i style="background:var(--coral);border-radius:50%"></i>มีเวรว่าง</span>' : ''}<span><i style="background:var(--warn-soft)"></i>ขอลาแล้ว</span></div></div>`;
     if (S.ptMode === 'avail' && canAvail) {
@@ -467,10 +578,10 @@
     h += `<h3>${dLong(d)}</h3>`;
     for (const s of myShifts().filter((x) => x.work_date === d)) {
       const lv = S.leaves.find((l) => l.shift_id === s.id && l.status === 'pending');
-      h += `<div class="card"><div class="between"><b>เวรของฉัน · ${esc(B(s.branch_id).name)}</b><span>${t5(s.start_time)}–${t5(s.end_time)}</span></div>${lv ? `<span class="pill warn">${ic('hourglass')}ขอลาแล้ว รออนุมัติ</span>` : (S.swaps || []).some((w) => w.shift_id === s.id || w.to_shift_id === s.id) ? `<span class="pill warn">${ic('repeat')}มีคำขอแลกเวรค้างอยู่</span>` : d >= t ? `<div class="row" style="flex-wrap:wrap">${d > t ? `<button class="btn" data-act="leaveSheet" data-id="${s.id}">${ic('calendar-x')}ขอลาวันนี้</button>` : ''}<button class="btn" data-act="swapSheet" data-id="${s.id}">${ic('repeat')}แลก / ยกเวร</button></div>` : ''}</div>`;
+      h += `<div class="card"><div class="between"><b>เวรของฉัน · ${esc(B(s.branch_id).name)}</b><span>${t5(s.start_time)}–${t5(s.end_time)}</span></div>${lv ? `<span class="pill warn">${ic('hourglass')}ขอลาแล้ว รออนุมัติ</span>` : (S.swaps || []).some((w) => PEND(w) && (w.shift_id === s.id || w.to_shift_id === s.id)) ? `<span class="pill warn">${ic('repeat')}มีคำขอแลกเวรค้างอยู่</span>` : d >= t ? `<div class="row" style="flex-wrap:wrap">${d > t ? `<button class="btn" data-act="leaveSheet" data-id="${s.id}">${ic('calendar-x')}ขอลาวันนี้</button>` : ''}<button class="btn" data-act="swapSheet" data-id="${s.id}">${ic('repeat')}แลก / ยกเวร</button></div>` : ''}</div>`;
     }
-    if (isPharm(me)) for (const o of S.open.filter((x) => x.work_date === d && x.work_date >= t)) h += openCard(o);
-    const others = S.shifts.filter((x) => x.work_date === d && x.member_id !== S.me.member_id);
+    if (isPharm(me)) for (const o of S.open.filter((x) => x.work_date === d && x.work_date >= t && canBranch(me, x.branch_id))) h += openCard(o);
+    const others = me.employment === 'parttime' && !S.org.pt_see_all ? [] : S.shifts.filter((x) => x.work_date === d && x.member_id !== S.me.member_id);
     if (others.length) h += `<div class="card"><b class="small">ใครอยู่ไหนวันนี้</b>${others.map((s) => { const m = M(s.member_id); return `<div class="row small">${avatar(m.display_name, m.color, 'sm')}<span class="grow">${esc(m.display_name)} · ${esc(B(s.branch_id).name)}</span><span class="muted">${t5(s.start_time)}–${t5(s.end_time)}</span></div>`; }).join('')}</div>`;
     return h;
   }
@@ -552,11 +663,33 @@
     refresh: () => refresh(),
     month: async (d) => { S.month = shiftMonth(S.month, Number(d.n)); const [a] = monthRange(S.month); S.sel = S.month === today().slice(0, 7) ? today() : a; await refresh(); },
     pick: (d) => { S.sel = d.d; render(); if (S.isOwner && innerWidth < 900) document.getElementById('day')?.scrollIntoView({ behavior: 'smooth' }); },
+    reqView: (d) => { S.reqView = d.v; if (d.v === 'done') S.hist = null; render(); },
+    calView: (d) => { S.calView = d.v; if (d.v === 'list') S.ptMode = 'view'; render(); },
+    week: async (d) => { S.sel = addDays(S.sel, Number(d.n)); const m = S.sel.slice(0, 7); if (m !== S.month) { S.month = m; await refresh(); } else render(); },
     ptMode: (d) => { if (S.draft && d.m !== 'avail') S.draft = null; S.ptMode = d.m; render(); },
     copy: (d) => copy(d.text),
     copyInvite: (d) => { const m = M(d.id); copy(`สวัสดีครับคุณ${shortName(m.display_name)} เชิญเข้าใช้ระบบลงเวร ลงเวลาของร้าน ${S.org.name}\n1) เปิดลิงก์นี้ใน LINE: https://liff.line.me/${CFG.LIFF_ID}\n2) กด "มีรหัสเชิญจากร้าน" แล้วใส่รหัส: ${S.invites[d.id]}`); },
+    profile: async () => {
+      const m = M(S.me.member_id), t = today(), a = t.slice(0, 8) + '01';
+      let att = [], hrs = null;
+      try { att = await q(sb.from('attendance').select('kind,at,branch_id').eq('member_id', m.id).gte('at', new Date(new Date(a + 'T00:00:00+07:00').getTime()).toISOString()).order('at')); } catch (_) {}
+      try { const r = await rpc('month_hours', { p_org: S.me.org_id, p_month: a }); hrs = r.find((x) => x.member_id === m.id) || null; } catch (_) {}
+      const days = {}; att.filter((x) => x.kind === 'in').forEach((x) => { const d = todayStr(S.tz, new Date(x.at)); if (!days[d]) days[d] = x; });
+      const L = { ok: 0, warn: 0, alert: 0 }; const hist = [];
+      Object.keys(days).sort().reverse().forEach((d) => { const s = myShifts().filter((y) => y.work_date === d).sort((p, q2) => mins(p.start_time) - mins(q2.start_time))[0]; const lm = s ? mins(fmtTime(days[d].at, S.tz)) - mins(s.start_time) : null; const k = lateKind(lm); if (k) L[k]++; hist.push({ d, at: days[d].at, k, lm, b: days[d].branch_id }); });
+      const brs = m.branch_ids && m.branch_ids.length ? m.branch_ids.map((b) => B(b).name).join(', ') : 'ทุกสาขา';
+      sheet('โปรไฟล์ของฉัน', `<div class="row">${avatar(m.display_name, m.color, 'lg', S.profile.picture)}<div><b>${esc(m.display_name)}</b><br><span class="small muted">${esc(ROLE[m.role] || '')} · ${esc(EMP[m.employment] || '')}${m.home_branch_id ? ' · ' + esc(B(m.home_branch_id).name) : ''}</span></div></div>
+        <div class="small" style="display:grid;grid-template-columns:auto 1fr;gap:4px 12px"><span class="muted">สาขาที่ทำได้</span><span>${esc(brs)}</span><span class="muted">ลงเวลา</span><span>${m.clock_free ? 'ไม่ต้องสแกน' : 'สแกน QR ที่ร้าน'}</span>${S.pay[m.id] != null ? `<span class="muted">ค่าจ้าง/ชม.</span><span>${baht(S.pay[m.id])} บาท</span>` : ''}</div>
+        <b class="small">เดือน${monthLabel(t.slice(0, 7))}</b>
+        <div class="grid" style="grid-template-columns:repeat(3,1fr);gap:6px"><div class="card" style="padding:10px;align-items:center;box-shadow:none;background:var(--ok-soft)"><b>${L.ok}</b><span class="tiny">ตรงเวลา</span></div><div class="card" style="padding:10px;align-items:center;box-shadow:none;background:var(--warn-soft)"><b>${L.warn}</b><span class="tiny">สายในเกณฑ์</span></div><div class="card" style="padding:10px;align-items:center;box-shadow:none;background:var(--coral-soft)"><b>${L.alert}</b><span class="tiny">สายเกินเกณฑ์</span></div></div>
+        ${hrs ? `<div class="between small"><span class="muted">เวลาลงจริง</span><b>${Number(hrs.actual_hours).toFixed(2)} ชม.</b></div>${Number(hrs.amount) || Number(hrs.hours) ? `<div class="between small"><span class="muted">ชั่วโมงคิดเงิน · ยอด</span><b>${Number(hrs.hours).toFixed(2)} ชม. · ฿${baht(hrs.amount)}</b></div>` : ''}` : ''}
+        <b class="small">ประวัติเข้างานเดือนนี้</b>
+        ${hist.length ? hist.slice(0, 15).map((x) => `<div class="between small"><span>${dShort(x.d)} · ${esc(B(x.b).name || '')}</span><span>${fmtTime(x.at, S.tz)} ${x.k ? `<span class="pill ${x.k}" style="font-size:11px">${LATE_TH[x.k]}${x.lm > 0 ? ' ' + x.lm + ' น.' : ''}</span>` : '<span class="tiny muted">ไม่มีเวร</span>'}</span></div>`).join('') : '<span class="small muted">ยังไม่มีการเข้างานเดือนนี้</span>'}
+        <button class="btn ghost" data-act="menu">${ic('settings')}บัญชีและร้าน</button>`);
+    },
     menu: () => {
       sheet('บัญชีของฉัน', `<div class="row">${avatar(S.profile.name, 'brand', 'lg', S.profile.picture)}<div><b>${esc(S.profile.name)}</b><br><span class="small muted">เข้าสู่ระบบด้วย LINE</span></div></div>
+        <button class="btn primary" data-act="profile">${ic('user-round')}โปรไฟล์และประวัติเข้างานของฉัน</button>
         ${S.orgs.length > 1 ? `<b class="small">สลับร้าน</b>${S.orgs.map((o) => `<button class="btn ${o.org_id === S.me.org_id ? 'primary' : ''}" data-act="switchOrg" data-id="${o.org_id}">${ic('store')}${esc(o.org_name)} · ${esc(ROLE[o.role])}</button>`).join('')}` : ''}
         <label class="field">เข้าร่วมร้านอื่นด้วยรหัสเชิญ<input id="inv" maxlength="12" placeholder="รหัส 8 ตัว"></label><button class="btn" data-act="acceptInvite">${ic('log-in')}เข้าร่วม</button>
         <button class="btn ghost" data-act="newOrgSheet">${ic('plus')}เปิดร้านใหม่</button>
@@ -615,8 +748,24 @@
     // owner
     addShift: () => addShiftSheet(),
     saveShift: async (d, el) => {
-      const b = val('sBranch'), who = val('sWho'), st = val('sStart'), en = val('sEnd'), note = (val('sNote') || '').trim() || null, rep = document.getElementById('sRepeat')?.checked;
+      const b = val('sBranch'), who = val('sWho'), st = val('sStart'), en = val('sEnd'), note = (val('sNote') || '').trim() || null, rep = document.getElementById('sRepeat')?.checked, paid = document.getElementById('sPaid').checked;
       if (!st || !en || en <= st) return toast('เวลาสิ้นสุดต้องหลังเวลาเริ่ม', 'err');
+      if (d.id || d.open) {
+        busyBtn(el, true);
+        try {
+          const day = (S.shifts.find((x) => x.id === d.id) || S.open.find((x) => x.id === d.open)).work_date;
+          if (d.id) {
+            if (who === 'open') { busyBtn(el, false); return toast('ถ้าจะเปลี่ยนเป็นเวรว่าง ให้ลบเวรนี้แล้วเพิ่มเวรว่างใหม่', 'err'); }
+            if (S.shifts.some((s) => s.id !== d.id && s.member_id === who && s.work_date === day && mins(s.start_time) < mins(en) && mins(st) < mins(s.end_time))) { busyBtn(el, false); return toast('ชนกับเวรอื่นของคนนี้', 'err'); }
+            await q(sb.from('shifts').update({ branch_id: b, member_id: who, start_time: st, end_time: en, note, paid }).eq('id', d.id));
+          } else {
+            await q(sb.from('open_shifts').update({ branch_id: b, start_time: st, end_time: en, reason: note }).eq('id', d.open));
+            if (who !== 'open') { const sid = await rpc('assign_open_shift', { p_open: d.open, p_member: who }); if (paid && sid) await q(sb.from('shifts').update({ paid: true }).eq('id', sid)); }
+          }
+          closeLayer(); toast('บันทึกแล้ว'); await refresh();
+        } catch (e) { busyBtn(el, false); toast(errMsg(e), 'err'); }
+        return;
+      }
       const [, last] = monthRange(S.sel.slice(0, 7)); const dates = [S.sel]; if (rep) for (let x = addDays(S.sel, 7); x <= last; x = addDays(x, 7)) dates.push(x);
       busyBtn(el, true);
       try {
@@ -624,11 +773,13 @@
         else {
           const clash = dates.filter((x) => S.shifts.some((s) => s.member_id === who && s.work_date === x && mins(s.start_time) < mins(en) && mins(st) < mins(s.end_time)));
           if (clash.length) { busyBtn(el, false); return toast('ชนกับเวรเดิมวันที่ ' + clash.map((x) => Number(x.slice(8))).join(', '), 'err'); }
-          await q(sb.from('shifts').insert(dates.map((x) => ({ org_id: S.me.org_id, branch_id: b, member_id: who, work_date: x, start_time: st, end_time: en, note }))));
+          await q(sb.from('shifts').insert(dates.map((x) => ({ org_id: S.me.org_id, branch_id: b, member_id: who, work_date: x, start_time: st, end_time: en, note, paid }))));
         }
         closeLayer(); toast(dates.length > 1 ? `เพิ่มเวรแล้ว ${dates.length} วัน` : 'เพิ่มเวรแล้ว'); await refresh();
       } catch (e) { busyBtn(el, false); toast(errMsg(e), 'err'); }
     },
+    editShift: (d) => addShiftSheet(S.shifts.find((x) => x.id === d.id)),
+    editOpen: (d) => addShiftSheet({ ...S.open.find((x) => x.id === d.id), isOpen: true }),
     delShift: async (d) => { try { await q(sb.from('shifts').delete().eq('id', d.id)); toast('ลบเวรแล้ว'); await refresh(); } catch (e) { toast(errMsg(e), 'err'); } },
     cancelOpen: async (d) => { try { await q(sb.from('open_shifts').update({ status: 'cancelled' }).eq('id', d.id)); toast('ยกเลิกเวรว่างแล้ว'); await refresh(); } catch (e) { toast(errMsg(e), 'err'); } },
     assign: async (d, el) => { busyBtn(el, true); try { await rpc('assign_open_shift', { p_open: d.open, p_member: d.m }); toast('มอบเวรให้ ' + M(d.m).display_name + ' แล้ว'); await refresh(); } catch (e) { busyBtn(el, false); toast(errMsg(e), 'err'); } },
@@ -637,7 +788,7 @@
     decideLeave: async (d, el) => { busyBtn(el, true); try { await rpc('decide_leave', { p_id: d.id, p_approve: d.ok === '1' }); toast(d.ok === '1' ? 'อนุมัติลาแล้ว' : 'ไม่อนุมัติ'); await refresh(); } catch (e) { busyBtn(el, false); toast(errMsg(e), 'err'); } },
     decideOt: async (d, el) => { busyBtn(el, true); try { await rpc('decide_ot', { p_member: d.m, p_date: d.d, p_approve: d.ok === '1' }); toast(d.ok === '1' ? 'อนุมัติ OT แล้ว' : 'ไม่อนุมัติ OT · คิดเฉพาะในเวลาเวร'); await refresh(); } catch (e) { busyBtn(el, false); toast(errMsg(e), 'err'); } },
     decideFix: async (d, el) => { busyBtn(el, true); try { await rpc('decide_fix', { p_id: d.id, p_approve: d.ok === '1' }); toast('บันทึกแล้ว'); await refresh(); } catch (e) { busyBtn(el, false); toast(errMsg(e), 'err'); } },
-    saveOrg: async (d, el) => { busyBtn(el, true); try { await q(sb.from('orgs').update({ name: val('oName').trim(), grace_minutes: Number(val('oGrace')), clip_to_shift: document.getElementById('oClip').checked, ot_min_minutes: Number(val('oOtMin')), allow_self_approve: document.getElementById('oSelf').checked, require_shift: document.getElementById('oReq').checked, early_minutes: Number(val('oEarly')), require_gps: document.getElementById('oGps').checked }).eq('id', S.me.org_id)); toast('บันทึกแล้ว'); await loadOrgs(S.me.org_id); } catch (e) { busyBtn(el, false); toast(errMsg(e), 'err'); } },
+    saveOrg: async (d, el) => { busyBtn(el, true); try { await q(sb.from('orgs').update({ name: val('oName').trim(), grace_minutes: Number(val('oGrace')), clip_to_shift: document.getElementById('oClip').checked, ot_min_minutes: Number(val('oOtMin')), allow_self_approve: document.getElementById('oSelf').checked, require_shift: document.getElementById('oReq').checked, early_minutes: Number(val('oEarly')), require_gps: document.getElementById('oGps').checked, pt_see_all: document.getElementById('oPtAll').checked }).eq('id', S.me.org_id)); toast('บันทึกแล้ว'); await loadOrgs(S.me.org_id); } catch (e) { busyBtn(el, false); toast(errMsg(e), 'err'); } },
     editBranch: (d) => branchSheet(d.id),
     useHere: async (d, el) => {
       busyBtn(el, true); const pos = await getPos(); busyBtn(el, false);
@@ -700,21 +851,40 @@
       busyBtn(el, true);
       try { const n = await rpc('send_payslips', { p_org: S.me.org_id, p_month: S.month + '-01' }); busyBtn(el, false); el.dataset.confirm = ''; el.innerHTML = ic('send') + 'ส่งสลิปทาง LINE'; icons(); toast(n ? `ส่งสลิปให้ ${n} คนแล้ว (ถึงภายใน 1–2 นาที)` : 'เดือนนี้ยังไม่มีใครมีชั่วโมงคิดเงิน'); } catch (e) { busyBtn(el, false); toast(errMsg(e), 'err'); }
     },
+    adjSheet: async (d) => {
+      const m = M(d.m), [a, b] = monthRange(S.month);
+      let list = []; try { list = await q(sb.from('pay_adjustments').select('*').eq('member_id', d.m).gte('work_date', a).lte('work_date', b).order('work_date')); } catch (e) { return toast(errMsg(e), 'err'); }
+      sheet('เงินพิเศษ · ' + m.display_name, `<p class="small muted">เดือน${monthLabel(S.month)} · บวกเข้ายอดค่าจ้างและสลิป</p>
+        ${list.length ? list.map((x) => `<div class="row small"><span class="grow">${dShort(x.work_date)} · ${esc(x.note)}</span><b>${Number(x.amount) > 0 ? '+' : ''}${baht(x.amount)}</b><button class="btn ghost" data-act="delAdj" data-id="${x.id}" data-m="${d.m}" aria-label="ลบ">${ic('trash-2')}</button></div>`).join('') : '<span class="small muted">ยังไม่มีรายการ</span>'}
+        <div class="fields"><label class="field">วันที่<input id="adjDate" type="date" value="${S.month === today().slice(0, 7) ? today() : a}" min="${a}" max="${b}"></label><label class="field">จำนวนเงิน (บาท)<input id="adjAmt" type="number" step="10" placeholder="เช่น 150 (หักใช้ -)"></label></div>
+        <label class="field">รายการ<input id="adjNote" list="adjNotes" placeholder="เช่น ค่าเดินทาง"><datalist id="adjNotes"><option value="ค่าเดินทาง"><option value="ค่าเวรฉุกเฉิน / โยกกะทันหัน"><option value="ค่าเดินทางสาขาไกล"><option value="โบนัส"></datalist></label>
+        <button class="btn primary block" data-act="addAdj" data-m="${d.m}">${ic('plus')}เพิ่มรายการ</button>`);
+    },
+    addAdj: async (d, el) => {
+      const amt = Number(val('adjAmt')), note = (val('adjNote') || '').trim(), dt = val('adjDate');
+      if (!amt || !note || !dt) return toast('ใส่วันที่ จำนวนเงิน และรายการ', 'err');
+      busyBtn(el, true);
+      try { await q(sb.from('pay_adjustments').insert({ org_id: S.me.org_id, member_id: d.m, work_date: dt, amount: amt, note })); toast('เพิ่มแล้ว'); ACT.adjSheet({ m: d.m }); loadHours(); } catch (e) { busyBtn(el, false); toast(errMsg(e), 'err'); }
+    },
+    delAdj: async (d) => { try { await q(sb.from('pay_adjustments').delete().eq('id', d.id)); toast('ลบแล้ว'); ACT.adjSheet({ m: d.m }); loadHours(); } catch (e) { toast(errMsg(e), 'err'); } },
     exportXlsx: async (d, el) => {
       busyBtn(el, true);
       try {
         if (!window.XLSX) await new Promise((ok, no) => { const sc = document.createElement('script'); sc.src = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js'; sc.onload = ok; sc.onerror = () => no(new Error('โหลดตัวสร้าง Excel ไม่สำเร็จ')); document.head.appendChild(sc); });
         const [sum, det] = await Promise.all([rpc('month_hours', { p_org: S.me.org_id, p_month: S.month + '-01' }), rpc('month_detail', { p_org: S.me.org_id, p_month: S.month + '-01' })]);
-        const rows = sum.filter((r) => M(r.member_id).role !== 'owner' && (!M(r.member_id).clock_free || Number(r.actual_hours) > 0));
+        const rows = sum.filter((r) => M(r.member_id).role !== 'owner' && (!M(r.member_id).clock_free || Number(r.actual_hours) > 0 || Number(r.extras) !== 0));
+        const [ma, mb] = monthRange(S.month); const adj = await q(sb.from('pay_adjustments').select('*').eq('org_id', S.me.org_id).gte('work_date', ma).lte('work_date', mb).order('work_date'));
+        const lb = {}, sn = new Set(); det.forEach((r) => { const k = r.member_id + r.work_date; if (sn.has(k)) return; sn.add(k); const lk = lateKind(r.late_min); if (lk) (lb[r.member_id] = lb[r.member_id] || { ok: 0, warn: 0, alert: 0 })[lk]++; });
         const h2 = (n) => Math.round(Number(n || 0) * 100) / 100;
-        const A = [['ชื่อ', 'การจ้าง', 'ชั่วโมงคิดเงิน', 'เวลาจริง (ชม.)', 'OT รออนุมัติ (ชม.)', 'บาท/ชม.', 'ยอด (บาท)']];
-        rows.forEach((r) => A.push([M(r.member_id).display_name, EMP[M(r.member_id).employment] || '', h2(r.hours), h2(r.actual_hours), h2(r.ot_pending_hours), r.hourly_rate == null ? '' : Number(r.hourly_rate), Math.round(Number(r.amount || 0))]));
-        A.push(['รวม', '', h2(rows.reduce((a, r) => a + Number(r.hours || 0), 0)), '', '', '', Math.round(rows.reduce((a, r) => a + Number(r.amount || 0), 0))]);
-        const D = [['วันที่', 'ชื่อ', 'เข้างาน', 'ออกงาน', 'เวลาจริง (ชม.)', 'ในเวลาเวร (ชม.)']];
-        det.forEach((r) => D.push([r.work_date, r.display_name, fmtTime(r.in_at, S.tz), r.out_at ? fmtTime(r.out_at, S.tz) : 'ไม่ได้กดออก', h2(r.actual_min / 60), h2(r.in_shift_min / 60)]));
-        const wb = XLSX.utils.book_new(), w1 = XLSX.utils.aoa_to_sheet(A), w2 = XLSX.utils.aoa_to_sheet(D);
-        w1['!cols'] = [{ wch: 22 }, { wch: 10 }, { wch: 14 }, { wch: 14 }, { wch: 16 }, { wch: 10 }, { wch: 12 }]; w2['!cols'] = [{ wch: 12 }, { wch: 22 }, { wch: 10 }, { wch: 12 }, { wch: 14 }, { wch: 14 }];
-        XLSX.utils.book_append_sheet(wb, w1, 'สรุป'); XLSX.utils.book_append_sheet(wb, w2, 'รายวัน');
+        const A = [['ชื่อ', 'การจ้าง', 'ชั่วโมงคิดเงิน', 'เวลาจริง (ชม.)', 'OT รออนุมัติ (ชม.)', 'บาท/ชม.', 'เงินพิเศษ (บาท)', 'ยอดรวม (บาท)', 'ตรงเวลา (วัน)', 'สายในเกณฑ์ (วัน)', 'สายเกินเกณฑ์ (วัน)']];
+        rows.forEach((r) => { const L = lb[r.member_id] || { ok: 0, warn: 0, alert: 0 }; A.push([M(r.member_id).display_name, EMP[M(r.member_id).employment] || '', h2(r.hours), h2(r.actual_hours), h2(r.ot_pending_hours), r.hourly_rate == null ? '' : Number(r.hourly_rate), Number(r.extras || 0), Math.round(Number(r.amount || 0)), L.ok, L.warn, L.alert]); });
+        A.push(['รวม', '', h2(rows.reduce((a, r) => a + Number(r.hours || 0), 0)), '', '', '', rows.reduce((a, r) => a + Number(r.extras || 0), 0), Math.round(rows.reduce((a, r) => a + Number(r.amount || 0), 0))]);
+        const D = [['วันที่', 'ชื่อ', 'เวรเริ่ม', 'เข้างาน', 'ออกงาน', 'สาย (นาที)', 'สถานะ', 'เวลาจริง (ชม.)', 'ในเวลาเวร (ชม.)', 'คิดเงิน (ชม.)']];
+        det.forEach((r) => D.push([r.work_date, r.display_name, r.shift_start ? t5(r.shift_start) : '-', fmtTime(r.in_at, S.tz), r.out_at ? fmtTime(r.out_at, S.tz) : 'ไม่ได้กดออก', r.late_min == null ? '' : Math.max(0, r.late_min), r.late_min == null ? 'ไม่มีเวร' : LATE_TH[lateKind(r.late_min)], h2(r.actual_min / 60), h2(r.in_shift_min / 60), h2(r.in_paid_min / 60)]));
+        const E = [['วันที่', 'ชื่อ', 'รายการ', 'จำนวนเงิน (บาท)']]; adj.forEach((x) => E.push([x.work_date, M(x.member_id).display_name, x.note, Number(x.amount)]));
+        const wb = XLSX.utils.book_new(), w1 = XLSX.utils.aoa_to_sheet(A), w2 = XLSX.utils.aoa_to_sheet(D), w3 = XLSX.utils.aoa_to_sheet(E);
+        w1['!cols'] = [{ wch: 22 }, { wch: 10 }, { wch: 14 }, { wch: 14 }, { wch: 16 }, { wch: 10 }, { wch: 14 }, { wch: 14 }, { wch: 12 }, { wch: 14 }, { wch: 16 }]; w2['!cols'] = [{ wch: 12 }, { wch: 22 }, { wch: 9 }, { wch: 9 }, { wch: 12 }, { wch: 10 }, { wch: 14 }, { wch: 13 }, { wch: 13 }, { wch: 12 }]; w3['!cols'] = [{ wch: 12 }, { wch: 22 }, { wch: 28 }, { wch: 14 }];
+        XLSX.utils.book_append_sheet(wb, w1, 'สรุป'); XLSX.utils.book_append_sheet(wb, w2, 'รายวัน'); XLSX.utils.book_append_sheet(wb, w3, 'เงินพิเศษ');
         XLSX.writeFile(wb, `PharmaShift_${S.org.name.replace(/[^\p{L}\p{N}]+/gu, '_')}_${S.month}.xlsx`);
         busyBtn(el, false); toast(liff.isInClient() ? 'ถ้าในแอป LINE ไม่ดาวน์โหลด ให้เปิดลิงก์แอปบนคอมพิวเตอร์แล้วกดอีกครั้ง' : 'ดาวน์โหลดแล้ว');
       } catch (e) { busyBtn(el, false); toast(errMsg(e), 'err'); }
@@ -737,7 +907,7 @@
     },
     editMember: (d) => memberSheet(d.id),
     saveMember: async (d, el) => {
-      const row = { display_name: (val('mName') || '').trim(), role: val('mRole'), employment: val('mRole') === 'owner' ? 'owner' : val('mEmp'), home_branch_id: val('mBranch') || null, color: val('mColor'), clock_free: document.getElementById('mFree').checked, notify: document.getElementById('mNotify').checked };
+      const row = { display_name: (val('mName') || '').trim(), role: val('mRole'), employment: val('mRole') === 'owner' ? 'owner' : val('mEmp'), home_branch_id: val('mBranch') || null, color: val('mColor'), clock_free: document.getElementById('mFree').checked, notify: document.getElementById('mNotify').checked, branch_ids: (() => { const a = [...document.querySelectorAll('[data-mb]')].filter((x) => x.checked).map((x) => x.dataset.mb); return a.length ? a : null; })() };
       if (!row.display_name) return toast('กรุณาใส่ชื่อ', 'err');
       const rate = val('mRate');
       busyBtn(el, true);
