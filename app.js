@@ -34,6 +34,7 @@
   const shiftCode = (s) => shiftName(s) + (multiB() ? ' · ' + shortB(s.branch_id) : '');
   const MARK = { OFF: 'วันหยุด', AL: 'ลาพักร้อน', HD: 'วันหยุดนักขัตฤกษ์', SL: 'ลาป่วย', PL: 'ลากิจ' };
   const narrow = () => window.innerWidth < 760;
+  const opt = (id, on, t, d) => `<label class="opt"><input type="checkbox" id="${id}" ${on ? 'checked' : ''}><span><b>${t}</b>${d ? `<span>${d}</span>` : ''}</span></label>`;
   const help = (t) => `<details class="hint"><summary>${ic('circle-help')}วิธีใช้</summary><div>${t}</div></details>`;
   const skel = (n = 3) => `<div class="skel-wrap">${Array.from({ length: n }, () => '<div class="skel"></div>').join('')}</div>`;
   const MARK_S = { OFF: 'หยุด', AL: 'พักร้อน', HD: 'นักขัตฯ', SL: 'ลาป่วย', PL: 'ลากิจ' };
@@ -265,8 +266,9 @@
     if (!S.isOwner) return '';
     const st = setupSteps(), done = st.filter((x) => x[1]).length;
     let hidden = false; try { hidden = localStorage.getItem('ps_setup_hide_' + S.me.org_id) === '1'; } catch (_) {}
-    if (done === st.length || (hidden && !inSettings)) return '';
-    return `<div class="card setup"><div class="between"><div><h3>ตั้งร้านให้พร้อมใช้</h3><span class="small muted">เสร็จแล้ว ${done} จาก ${st.length} ขั้น</span></div>${inSettings ? '' : `<button class="btn ghost" data-act="dismissSetup">ซ่อน</button>`}</div>
+    if (done === st.length) return '';
+    if (hidden) return inSettings ? `<button class="btn ghost" data-act="showSetup" style="width:fit-content">${ic('list-checks')}แสดงเช็กลิสต์ตั้งร้าน (เสร็จ ${done}/${st.length})</button>` : '';
+    return `<div class="card setup"><div class="between"><div><h3>ตั้งร้านให้พร้อมใช้</h3><span class="small muted">เสร็จแล้ว ${done} จาก ${st.length} ขั้น</span></div><button class="btn" data-act="dismissSetup" style="flex:none">${ic('eye-off')}ซ่อนเช็กลิสต์</button></div>
       <div class="hbar"><i style="width:${done / st.length * 100}%"></i></div>
       ${st.map(([t, ok, sec], i) => `<div class="step ${ok ? 'ok' : ''}"><span class="dot">${ok ? ic('check') : i + 1}</span><span class="grow small">${t}</span>${ok ? '' : sec === 'friend' ? `<a class="btn" href="https://line.me/R/ti/p/${encodeURIComponent(S.app.line_oa_id)}" target="_blank" rel="noopener">เพิ่มเพื่อน</a>` : sec ? `<button class="btn" data-act="tab" data-tab="set" data-sec="${sec}">ไปทำ</button>` : `<button class="btn" data-act="tab" data-tab="cal">ไปทำ</button>`}</div>`).join('')}</div>`;
   }
@@ -479,7 +481,7 @@
     for (const br of S.branches.filter((x) => x.active)) {
       const ss = S.shifts.filter((x) => x.work_date === d && x.branch_id === br.id), os = S.open.filter((x) => x.work_date === d && x.branch_id === br.id);
       h += `<div class="stack" style="background:var(--bg);border-radius:14px;padding:12px"><div class="between"><b>${esc(br.name)}</b><span class="tiny muted">${t5(br.open_time)}–${t5(br.close_time)}</span></div>`;
-      if (!ss.length && !os.length) h += `<span class="small muted">ไม่มีเวร</span>`;
+      if (!ss.length && !os.length) h += d >= t ? `<div class="nocover">${ic('triangle-alert')}<span class="grow"><b>ยังไม่มีคนเข้าเวร</b><br><span class="small">ร้านเปิด ${t5(br.open_time)}–${t5(br.close_time)} · เพิ่มเวรหรือประกาศเวรว่าง</span></span><button class="btn primary" data-act="addShift">${ic('plus')}เพิ่มเวร</button></div>` : `<span class="small muted">ไม่มีเวร</span>`;
       for (const s of ss) { const m = M(s.member_id); h += `<div class="row">${avatar(m.display_name, m.color, 'sm')}<span class="small grow">${esc(m.display_name)}${m.employment === 'fulltime' && s.paid ? ' <span class="pill ok">เวรพิเศษ คิดรายชม.</span>' : ''}${s.note ? ` <span class="muted">· ${esc(s.note)}</span>` : ''}</span><span class="small muted">${t5(s.start_time)}–${t5(s.end_time)}</span>${d >= t ? `${s.member_id === S.me.member_id ? `<button class="btn ghost" data-act="swapSheet" data-id="${s.id}" aria-label="แลกเวร">${ic('repeat')}</button>` : ''}<button class="btn ghost" data-act="editShift" data-id="${s.id}" aria-label="แก้ไขเวร">${ic('pencil')}</button><button class="btn ghost" data-act="delShift" data-id="${s.id}" aria-label="ลบเวร">${ic('trash-2')}</button>` : ''}</div>`; }
       for (const o of os) {
         h += `<div class="small" style="color:var(--coral-deep)">${ic('circle-alert')} <b>เวรว่าง ${t5(o.start_time)}–${t5(o.end_time)}</b>${o.reason ? ' · ' + esc(o.reason) : ''}</div><div class="actions" style="display:flex;flex-wrap:wrap;gap:6px">`;
@@ -492,7 +494,7 @@
     if (mks.length) h += `<div class="small">${ic('calendar-off')} ${mks.map((x) => `${esc(shortName(M(x.member_id).display_name))} <b>${MARK[x.kind]}</b>${Number(x.days) === 0.5 ? ' ครึ่งวัน' : ''}`).join(' · ')}</div>`;
     for (const r of ownerSreqs().filter((x) => x.work_date === d)) h += sreqCard(r);
     const names = S.members.filter((m) => avl.has(m.id)).map((m) => esc(shortName(m.display_name)));
-    return h + `<p class="small muted">${ic('hand')} แจ้งว่าว่างวันนี้: ${names.length ? names.join(', ') : 'ยังไม่มี'}</p>`;
+    return h + `<div class="availnote ${names.length ? 'has' : ''}">${ic('hand')}<span><b>พาร์ทไทม์ที่แจ้งว่าว่างวันนี้</b><br>${names.length ? names.join(', ') : '<span class="muted">ยังไม่มีใครแจ้ง</span>'}</span></div>`;
   }
   function addShiftSheet(ed) {
     const d = ed ? ed.work_date : S.sel, br = ed ? B(ed.branch_id) : (S.branches.find((x) => x.active) || S.branches[0]);
@@ -648,24 +650,25 @@
       ['notify', 'bell-ring', 't-sun', 'แจ้งเตือนทาง LINE', Object.values(S.org.notify || {}).filter((v) => v === false).length ? 'ปิดบางรายการ' : 'เปิดทั้งหมด'],
     ];
     if (S.me.role === 'owner') items.push(['reset', 'trash-2', 't-coral', 'ล้างข้อมูล / ลบร้าน', 'ใช้หลังสาธิต หรือก่อนเริ่มใช้งานจริง']);
-    return `<h1>ตั้งค่า</h1>${setupCard(true)}<div class="card" style="padding:6px 14px">${items.map(([k, i, t, n, d]) => `<button class="setrow" data-act="setSec" data-v="${k}"><span class="icon-chip ${t}">${ic(i)}</span><span class="grow"><b>${n}</b><br><span class="small muted">${d}</span></span>${ic('chevron-right')}</button>`).join('')}</div><p class="tiny muted" style="text-align:center">เวอร์ชัน 3 พ.ย. 69 ลบสาขาได้ (ตรวจตาราง · ลบสาขา)</p>`;
+    return `<h1>ตั้งค่า</h1>${setupCard(true)}<div class="card" style="padding:6px 14px">${items.map(([k, i, t, n, d]) => `<button class="setrow" data-act="setSec" data-v="${k}"><span class="icon-chip ${t}">${ic(i)}</span><span class="grow"><b>${n}</b><br><span class="small muted">${d}</span></span>${ic('chevron-right')}</button>`).join('')}</div><p class="tiny muted" style="text-align:center">เวอร์ชัน 3 พ.ย. 69 อ่านง่ายโหมดมืด (ลบสาขา · ตรวจตาราง)</p>`;
   }
   function ownerSetAll() {
     const liffUrl = `https://liff.line.me/${CFG.LIFF_ID}`, kioskUrl = new URL('kiosk.html', location.href).href;
     let h = `<div class="grid" style="align-items:start">
       <div class="card" data-sec="shop"><div class="row"><span class="icon-chip t-brand">${ic('store')}</span><h2>ร้านและกฎการลงเวลา</h2></div>
-        <label class="field">ชื่อร้าน<input id="oName" value="${esc(S.org.name)}"></label>
-        <label class="field">เวลาผ่อนผันก่อนนับว่าสาย<select id="oGrace">${[0, 5, 10, 15, 20, 30].map((n) => `<option value="${n}" ${grace() === n ? 'selected' : ''}>${n ? n + ' นาที' : 'ไม่มี'}</option>`).join('')}</select></label>
-        <label class="row small"><input type="checkbox" id="oReq" ${S.org.require_shift ? 'checked' : ''}> สแกนเข้างานได้เฉพาะวันที่มีเวร (เจ้าของร้านไม่ต้อง)</label>
-        <label class="field">สแกนก่อนเวลาเวรได้<select id="oEarly">${[15, 30, 60, 120].map((n) => `<option value="${n}" ${(S.org.early_minutes ?? 60) === n ? 'selected' : ''}>${n} นาที</option>`).join('')}</select></label>
-        <label class="row small"><input type="checkbox" id="oClip" ${S.org.clip_to_shift ? 'checked' : ''}> คิดชั่วโมงไม่เกินเวลาเวร (ทำเกินเวรเป็น OT ต้องอนุมัติก่อนจ่าย)</label>
-        <label class="field">ไม่นับส่วนที่เกินเวรน้อยกว่า<select id="oOtMin">${[0, 10, 15, 30].map((n) => `<option value="${n}" ${(S.org.ot_min_minutes ?? 15) === n ? 'selected' : ''}>${n ? n + ' นาที' : 'นับทุกนาที'}</option>`).join('')}</select></label>
-        <label class="row small"><input type="checkbox" id="oSelf" ${S.org.allow_self_approve ? 'checked' : ''}> ให้ผู้จัดการอนุมัติคำขอของตัวเองได้ (เจ้าของร้านอนุมัติได้เสมอ)</label>
-        <label class="row small"><input type="checkbox" id="oPtAll" ${S.org.pt_see_all ? 'checked' : ''}> ให้ พาร์ทไทม์ เห็นตารางเวรของคนอื่น (ปิด = เห็นเฉพาะเวรตัวเองและเวรว่าง)</label>
-        <label class="row small"><input type="checkbox" id="oGps" ${S.org.require_gps ? 'checked' : ''}> บังคับเปิดตำแหน่ง (GPS) ทุกครั้งที่สแกน (ไม่เปิด = สแกนไม่ได้)</label>
+          ${(() => { const opt = (id, on, t, d) => `<label class="opt"><input type="checkbox" id="${id}" ${on ? 'checked' : ''}><span><b>${t}</b>${d ? `<small>${d}</small>` : ''}</span></label>`;
+          const grp = (icn, t, body) => `<div class="setgroup"><div class="gh">${ic(icn)}<b>${t}</b></div>${body}</div>`;
+          return grp('store', 'ข้อมูลร้าน', `<label class="field">ชื่อร้าน<input id="oName" value="${esc(S.org.name)}"></label>`)
+          + grp('scan-line', 'การสแกนเข้างาน', `<div class="fields"><label class="field">นับว่าสายเมื่อเกินเวลาเวร<select id="oGrace">${[0, 5, 10, 15, 20, 30].map((n) => `<option value="${n}" ${grace() === n ? 'selected' : ''}>${n ? n + ' นาที' : 'ทันที (ไม่ผ่อนผัน)'}</option>`).join('')}</select></label><label class="field">สแกนก่อนเวลาเวรได้<select id="oEarly">${[15, 30, 60, 120].map((n) => `<option value="${n}" ${(S.org.early_minutes ?? 60) === n ? 'selected' : ''}>${n} นาที</option>`).join('')}</select></label></div>`
+              + opt('oReq', S.org.require_shift, 'สแกนเข้างานได้เฉพาะวันที่มีเวร', 'กันคนสแกนผิดวัน · เจ้าของร้านและคนที่ตั้งว่าไม่ต้องลงเวลาไม่ติดกฎนี้')
+              + opt('oGps', S.org.require_gps, 'บังคับเปิดตำแหน่ง (GPS) ทุกครั้งที่สแกน', 'ถ้าไม่เปิดตำแหน่งจะสแกนไม่ได้'))
+          + grp('wallet', 'การคิดชั่วโมงและ OT', opt('oClip', S.org.clip_to_shift, 'คิดชั่วโมงไม่เกินเวลาเวร', 'ทำเกินเวรนับเป็น OT ต้องอนุมัติก่อนจึงจะจ่าย')
+              + `<label class="field">ไม่นับส่วนที่เกินเวรน้อยกว่า<select id="oOtMin">${[0, 10, 15, 30].map((n) => `<option value="${n}" ${(S.org.ot_min_minutes ?? 15) === n ? 'selected' : ''}>${n ? n + ' นาที' : 'นับทุกนาที'}</option>`).join('')}</select></label>`)
+          + grp('users', 'สิทธิ์และการมองเห็น', opt('oSelf', S.org.allow_self_approve, 'ผู้จัดการอนุมัติคำขอของตัวเองได้', 'เจ้าของร้านอนุมัติได้เสมอ')
+              + opt('oPtAll', S.org.pt_see_all, 'พาร์ทไทม์เห็นตารางเวรของคนอื่น', 'ปิดไว้ = เห็นเฉพาะเวรตัวเองและเวรว่าง')); })()}
         <button class="btn primary" data-act="saveOrg">${ic('check')}บันทึก</button>
         <div class="stack small" style="border-top:1px solid var(--line);padding-top:12px"><b>ลิงก์แอปสำหรับพนักงาน</b><div class="row"><span class="code" style="font-size:12px;letter-spacing:0;overflow:hidden;text-overflow:ellipsis">${esc(liffUrl)}</span><button class="btn ghost" data-act="copy" data-text="${esc(liffUrl)}">${ic('copy')}</button></div>
-        <b>ลิงก์จอที่ร้าน (เปิดบนโทรศัพท์ร้าน)</b><div class="row"><span class="code" style="font-size:12px;letter-spacing:0;overflow:hidden;text-overflow:ellipsis">${esc(kioskUrl)}</span><button class="btn ghost" data-act="copy" data-text="${esc(kioskUrl)}">${ic('copy')}</button></div><span class="muted" style="font-size:12px">เวอร์ชัน 3 พ.ย. 69 ลบสาขาได้ (ตรวจตาราง · ลบสาขา)</span></div></div>
+        <b>ลิงก์จอที่ร้าน (เปิดบนโทรศัพท์ร้าน)</b><div class="row"><span class="code" style="font-size:12px;letter-spacing:0;overflow:hidden;text-overflow:ellipsis">${esc(kioskUrl)}</span><button class="btn ghost" data-act="copy" data-text="${esc(kioskUrl)}">${ic('copy')}</button></div><span class="muted" style="font-size:12px">เวอร์ชัน 3 พ.ย. 69 อ่านง่ายโหมดมืด (ลบสาขา · ตรวจตาราง)</span></div></div>
       <div class="card" data-sec="branch"><div class="card-head"><div class="row"><span class="icon-chip t-sky">${ic('map-pin')}</span><h2>สาขา</h2></div><button class="btn" data-act="editBranch">${ic('plus')}เพิ่มสาขา</button></div>`;
     if (!S.branches.length) h += `<p class="small muted">ยังไม่มีสาขา กด "เพิ่มสาขา" เพื่อเริ่ม</p>`;
     for (const br of S.branches) h += `<div class="list-row" style="flex-wrap:wrap"><div class="grow"><b>${esc(br.name)}</b>${br.active ? '' : ' <span class="pill wait">ปิดใช้งาน</span>'}<br><span class="small muted">${t5(br.open_time)}–${t5(br.close_time)}${br.lat != null ? ' · ตั้งตำแหน่งแล้ว' : ' · ยังไม่ตั้งตำแหน่ง'}</span></div><button class="btn ghost" data-act="pairKiosk" data-id="${br.id}">${ic('monitor-smartphone')}จับคู่จอ QR</button>${br.allow_static ? `<a class="btn ghost" href="print.html?b=${br.id}" target="_blank" rel="noopener">${ic('printer')}ปริ้น QR ติดผนัง</a>` : ''}<button class="btn ghost" data-act="editBranch" data-id="${br.id}" aria-label="แก้ไขสาขา">${ic('pencil')}</button></div>`;
@@ -687,7 +690,7 @@
       ${help('กฎหมายแรงงานกำหนดชั่วโมงทำงานไม่เกิน 48 ชม./สัปดาห์ และให้มีวันหยุดอย่างน้อยสัปดาห์ละ 1 วัน · ร้านขายยาต้องมีเภสัชกรประจำตลอดเวลาที่เปิด · การเตือนไม่ได้ห้ามลงเวร แค่ช่วยให้เห็นจุดที่ควรแก้')}
       <button class="btn primary" data-act="saveRules">${ic('check')}บันทึก</button></div>`; }
     h += `<div class="card" data-sec="preset"><div class="row"><span class="icon-chip t-teal">${ic('clock')}</span><h2>เวรสำเร็จรูป</h2></div><span class="small muted">ชื่อเวรที่ใช้บ่อย เช่น เต็มวัน ช่วงเช้า ช่วงบ่าย</span>
-      <div id="presetRows">${presets().map((p, i) => `<div class="row" style="gap:6px"><input class="pc" value="${esc(p.code)}" maxlength="12" style="width:110px" aria-label="ชื่อเวร"><input class="ps" type="time" value="${p.start}" aria-label="เริ่ม"><input class="pe" type="time" value="${p.end}" aria-label="ถึง"><button class="btn ghost" data-act="delPreset" data-i="${i}" aria-label="ลบ">${ic('trash-2')}</button></div>`).join('')}</div>
+      <div id="presetRows">${presets().map((p, i) => `<div class="row prow"><label><span>ชื่อเวร</span><input class="pc" value="${esc(p.code)}" maxlength="12"></label><label><span>เริ่ม</span><input class="ps" type="time" value="${p.start}"></label><label><span>ถึง</span><input class="pe" type="time" value="${p.end}"></label><button class="btn ghost" data-act="delPreset" data-i="${i}" aria-label="ลบเวร ${esc(p.code)}">${ic('trash-2')}</button></div>`).join('')}</div>
       <div class="row"><button class="btn" data-act="addPreset">${ic('plus')}เพิ่มเวร</button><button class="btn primary" data-act="savePresets">${ic('check')}บันทึก</button></div></div>`;
     h += `<div class="card" data-sec="notify"><div class="row"><span class="icon-chip t-sun">${ic('bell-ring')}</span><h2>แจ้งเตือนทาง LINE</h2></div>
       ${nk.map(([k, t]) => `<label class="row small"><input type="checkbox" data-nk="${k}" ${N[k] !== false ? 'checked' : ''}> ${t}</label>`).join('')}
@@ -906,6 +909,7 @@
       try { await q(sb.from('orgs').update({ rules }).eq('id', S.me.org_id)); S.org.rules = rules; toast('บันทึกแล้ว'); render(); } catch (e) { busyBtn(el, false); toast(/rules/.test(errMsg(e)) ? 'ต้องรัน SQL อัปเดต 010 ก่อน' : errMsg(e), 'err'); } },
     pick: (d) => { S.sel = d.d; render(); if (S.isOwner && innerWidth < 900) document.getElementById('day')?.scrollIntoView({ behavior: 'smooth' }); },
     setSec: (d) => { S.setSec = d.v || null; render(); window.scrollTo(0, 0); },
+    showSetup: () => { try { localStorage.removeItem('ps_setup_hide_' + S.me.org_id); } catch (_) {} render(); },
     dismissSetup: () => { try { localStorage.setItem('ps_setup_hide_' + S.me.org_id, '1'); } catch (_) {} render(); },
     payView: (d) => { S.payView = d.v; render(); },
     exportReport: async (d, el) => {
@@ -1120,7 +1124,7 @@
       busyBtn(el, true);
       try { await rpc('rotate_branch_secret', { p_branch: d.id }); closeLayer(); toast('เปลี่ยนรหัสลับแล้ว กรุณาจับคู่โทรศัพท์ร้านใหม่'); } catch (e) { busyBtn(el, false); toast(errMsg(e), 'err'); }
     },
-    addPreset: () => { const w = document.getElementById('presetRows'); w.insertAdjacentHTML('beforeend', `<div class="row" style="gap:6px"><input class="pc" maxlength="12" style="width:110px" placeholder="ชื่อเวร"><input class="ps" type="time" value="09:00"><input class="pe" type="time" value="17:00"><button class="btn ghost" data-act="delPreset" aria-label="ลบ">${ic('trash-2')}</button></div>`); icons(); },
+    addPreset: () => { const w = document.getElementById('presetRows'); w.insertAdjacentHTML('beforeend', `<div class="row prow"><label><span>ชื่อเวร</span><input class="pc" maxlength="12" placeholder="เช่น ดึก"></label><label><span>เริ่ม</span><input class="ps" type="time" value="09:00"></label><label><span>ถึง</span><input class="pe" type="time" value="17:00"></label><button class="btn ghost" data-act="delPreset" aria-label="ลบ">${ic('trash-2')}</button></div>`); icons(); },
     delPreset: (d, el) => el.closest('.row').remove(),
     savePresets: async (d, el) => {
       const rows = [...document.querySelectorAll('#presetRows .row')].map((r) => ({ code: r.querySelector('.pc').value.trim(), start: r.querySelector('.ps').value, end: r.querySelector('.pe').value })).filter((x) => x.code && x.start && x.end);

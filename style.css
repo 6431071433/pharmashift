@@ -264,3 +264,31 @@ table.sheetg{font-size:12.5px}table.sheetg button.gc b{font-size:12px}table.shee
 .idot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-left:3px;vertical-align:middle;background:var(--warn)}.idot.alert{background:var(--coral-deep)}
 table.sheetg th.issd{box-shadow:inset 0 -3px 0 var(--coral-deep)}
 .gc.iss{box-shadow:inset 0 0 0 2px var(--coral-deep)}
+/* ตั้งค่าอ่านง่าย */
+.setgroup{display:flex;flex-direction:column;gap:12px;background:var(--bg);border:1px solid var(--line);border-radius:14px;padding:14px}
+.setgroup .gh{display:flex;align-items:center;gap:8px;font-size:15px;padding-bottom:8px;border-bottom:1px solid var(--line)}
+.setgroup .gh svg{width:18px;height:18px;color:var(--brand)}
+.opt{display:flex;align-items:flex-start;gap:10px;cursor:pointer;font-size:14.5px}
+.opt input{width:18px;height:18px;margin-top:2px;flex:none;accent-color:var(--brand)}
+.opt span{display:flex;flex-direction:column;gap:2px}.opt small{color:var(--muted);font-size:13px;line-height:1.4}
+.setup .between{flex-wrap:wrap}
+.prow{flex-wrap:wrap;align-items:flex-end;gap:8px;padding:10px 0;border-bottom:1px solid var(--line)}
+.prow label{display:flex;flex-direction:column;gap:4px;font-size:13px;font-weight:500;color:var(--muted)}
+.prow label:first-child{flex:1 1 140px}
+.prow input{font:inherit;font-size:15px;font-weight:400;padding:9px 11px;border-radius:12px;border:1.5px solid var(--line);background:var(--surface);color:var(--ink);min-width:0;width:100%;color-scheme:light dark}
+.prow input[type=time]{width:150px}
+.prow .btn{align-self:flex-end}
+[data-sec=shop] .setgroup + .setgroup{margin-top:4px}
+/* โหมดมืด: ช่องเลือก/ช่องกรอกทุกจุดอ่านออก */
+:where(select,input:not([type=checkbox]):not([type=radio]):not([type=range]),textarea){background:var(--surface);color:var(--ink);border:1.5px solid var(--line);border-radius:10px}
+:where(select){padding:7px 10px;font-size:14px;cursor:pointer}
+select option{background:var(--surface);color:var(--ink)}
+/* วันที่ยังไม่มีคนเข้าเวร / เวรว่าง ต้องเด่น */
+.nocover{display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:var(--coral-soft);color:var(--coral-deep);border:1.5px solid var(--coral);border-radius:12px;padding:10px 12px}
+.nocover>svg{width:22px;height:22px;flex:none}.nocover .small{color:var(--coral-deep);opacity:.9}
+.nocover .btn{flex:none}
+.chip.open{color:#fff;background:var(--coral);outline:0;font-weight:600}
+@media (prefers-color-scheme:dark){.chip.open{color:#2A0E06}}
+.availnote{display:flex;gap:10px;align-items:flex-start;border:1.5px dashed var(--line);border-radius:12px;padding:10px 12px;font-size:14px}
+.availnote>svg{width:20px;height:20px;flex:none;color:var(--muted)}
+.availnote.has{border:1.5px solid var(--ok);background:var(--ok-soft)}.availnote.has>svg{color:var(--ok)}
