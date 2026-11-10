@@ -2,15 +2,16 @@
 <html lang="th">
 <head>
 <meta charset="utf-8">
+<meta http-equiv="Cache-Control" content="no-cache">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#1E2A80">
 <title>PharmaShift · จอที่ร้าน</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Prompt:wght@400;500;600&family=IBM+Plex+Sans+Thai+Looped:wght@400;500;600;700&display=swap">
-<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Kanit:wght@400;500;600&family=IBM+Plex+Sans+Thai:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="style.css?v=20261111a">
 <style>
   body{background:linear-gradient(175deg,#2B3AA8,#0E1442 78%);color:#fff;min-height:100vh;min-height:100dvh}
-  .k{min-height:100vh;min-height:100dvh;max-width:520px;margin:0 auto;display:flex;flex-direction:column;align-items:center;justify-content:space-between;gap:14px;text-align:center;
+  #k{min-height:100vh;min-height:100dvh;max-width:520px;margin:0 auto;display:flex;flex-direction:column;align-items:center;justify-content:space-between;gap:14px;text-align:center;
      padding:calc(16px + env(safe-area-inset-top,0px)) max(20px,env(safe-area-inset-right,0px)) calc(16px + env(safe-area-inset-bottom,0px)) max(20px,env(safe-area-inset-left,0px))}
   .khead{display:flex;align-items:center;gap:10px;width:100%;text-align:left}
   .khead .logo{width:34px;height:34px;flex:none}
@@ -27,18 +28,19 @@
   .duty .row{gap:12px}
   .duty .av{border:2px solid rgba(255,255,255,.6)}
   .pair{background:rgba(255,255,255,.1);border-radius:24px;padding:22px;width:100%;display:flex;flex-direction:column;gap:14px}
-  .pair input{font:600 30px var(--display);letter-spacing:.4em;text-align:center;padding:12px;border-radius:16px;border:0;width:100%;color:#161A35}
+  .pair input{font:600 30px var(--display);letter-spacing:.4em;text-align:center;padding:12px;border-radius:16px;border:0;width:100%;color:#161A35;background:#fff}
+  .pair input::placeholder{color:#B5BBD0}
   .pair .btn{background:#FF7A33;border-color:#FF7A33;color:#fff;font-size:17px;padding:13px}
   .err{color:#FFB4A1;min-height:1.4em;font-size:14px}
 </style>
 </head>
 <body>
 <main class="k" id="k"></main>
-<script src="config.js"></script>
+<script src="config.js?v=20261111a"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/lucide@0.460.0/dist/umd/lucide.min.js"></script>
-<script src="common.js"></script>
-<script src="kiosk.js"></script>
+<script src="common.js?v=20261111a"></script>
+<script src="kiosk.js?v=20261111a"></script>
 </body>
 </html>

@@ -2,10 +2,11 @@
 <html lang="th">
 <head>
 <meta charset="utf-8">
+<meta http-equiv="Cache-Control" content="no-cache">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>PharmaShift · QR ติดผนัง</title>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Prompt:wght@400;500;600&family=IBM+Plex+Sans+Thai+Looped:wght@400;500;600&display=swap">
-<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Kanit:wght@400;500;600&family=IBM+Plex+Sans+Thai:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="style.css?v=20261111a">
 <style>
   body{background:#E9EBF5;color:#161A35}
   .bar{max-width:210mm;margin:16px auto;display:flex;gap:10px;justify-content:center;flex-wrap:wrap;padding:0 16px}
@@ -31,10 +32,10 @@
 </head>
 <body>
 <div id="root"><div class="msg"><div class="spinner" style="margin:0 auto"></div></div></div>
-<script src="config.js"></script>
+<script src="config.js?v=20261111a"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js"></script>
-<script src="common.js"></script>
+<script src="common.js?v=20261111a"></script>
 <script>
 (async function () {
   const { CFG, esc, errMsg } = window.PS;
